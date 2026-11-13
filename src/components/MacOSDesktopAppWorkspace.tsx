@@ -1348,11 +1348,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           </h2>
           <p className="text-sm text-slate-400 mt-2 max-w-2xl leading-relaxed">
             Begitu dipasang dari <strong className="text-sky-300">OPUNG-Installer.dmg</strong> ke{' '}
-            <strong className="text-slate-200">Applications</strong>, ikon{' '}
-            <strong className="text-sky-300">🎙️ OPUNG</strong> langsung muncul di{' '}
-            <strong className="text-slate-200">Menu Bar kanan atas macOS</strong> dan mengalirkan
-            suara jernih Anda ke <strong className="text-emerald-300">BlackHole 2ch</strong> untuk
-            Google Meet &amp; Zoom.
+            <strong className="text-slate-200">Applications</strong>,{' '}
+            <strong className="text-sky-300">logo OPUNG</strong> langsung muncul di{' '}
+            <strong className="text-slate-200">Menu Bar kanan atas macOS (samping baterai/Wi-Fi)</strong>{' '}
+            dan mengalirkan suara jernih Anda ke <strong className="text-emerald-300">BlackHole 2ch</strong>{' '}
+            untuk Google Meet &amp; Zoom.
           </p>
         </div>
 
@@ -1407,17 +1407,19 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             focusedAppMode ? 'lg:col-span-12' : 'lg:col-span-5'
           } flex flex-col items-center`}
         >
-          {/* Simulated macOS Top Menu Bar Strip (Showing OPUNG Icon in Status Bar) */}
+          {/* Simulated macOS Top Menu Bar Strip (Showing ONLY the OPUNG Logo Icon in Status Bar) */}
           <div className="w-full max-w-[390px] mb-2 px-3.5 py-1.5 rounded-lg bg-[#161D2E]/90 border border-slate-700/70 flex items-center justify-between text-[11px] text-slate-300 select-none">
             <span className="text-slate-400 font-medium">macOS Menu Bar</span>
             <div className="flex items-center gap-3">
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-sky-400/20 border border-sky-400/50 text-sky-300 font-bold">
+              <span
+                title="Logo OPUNG di Menu Bar macOS (Tanpa Teks)"
+                className="inline-flex items-center justify-center p-1 rounded bg-sky-400/15 border border-sky-400/40"
+              >
                 <img
                   src="/opung-icon.png"
-                  alt=""
-                  className="w-3.5 h-3.5 rounded-[3px]"
+                  alt="Logo OPUNG Menu Bar"
+                  className="w-4 h-4 rounded-[3.5px]"
                 />
-                OPUNG
               </span>
               <span className="text-slate-400 font-mono text-[10px]">Wi-Fi · 100%</span>
             </div>

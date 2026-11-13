@@ -1680,19 +1680,52 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     [appMenuItem setSubmenu:appMenu];
 }
 
+- (NSImage *)createOpungMenuBarLogoIcon {
+    NSImage *logo = [NSImage imageWithSize:NSMakeSize(18.0, 18.0) flipped:NO drawingHandler:^BOOL(NSRect dstRect) {
+        // 1. Dark Navy Squircle Background (#0A101E)
+        NSBezierPath *bgPath = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(0.8, 0.8, 16.4, 16.4) xRadius:4.2 yRadius:4.2];
+        [[NSColor colorWithSRGBRed:0.04 green:0.063 blue:0.118 alpha:1.0] setFill];
+        [bgPath fill];
+
+        // Subtle Sky-Blue Border
+        [[NSColor colorWithSRGBRed:0.22 green:0.74 blue:0.97 alpha:0.35] setStroke];
+        [bgPath setLineWidth:0.6];
+        [bgPath stroke];
+
+        // 2. White Outer 'O' Ring (#F1F5F9)
+        NSBezierPath *ringPath = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(3.4, 3.4, 11.2, 11.2)];
+        [[NSColor colorWithSRGBRed:0.95 green:0.97 blue:1.0 alpha:1.0] setStroke];
+        [ringPath setLineWidth:2.05];
+        [ringPath stroke];
+
+        // 3. 5 Vertical Soundwave Bars Inside 'O' (#38BDF8)
+        [[NSColor colorWithSRGBRed:0.22 green:0.74 blue:0.97 alpha:1.0] setStroke];
+        CGFloat xs[5] = { 6.6, 7.8, 9.0, 10.2, 11.4 };
+        CGFloat halfHeights[5] = { 1.1, 2.0, 2.85, 2.0, 1.1 };
+        for (int i = 0; i < 5; i++) {
+            NSBezierPath *bar = [NSBezierPath bezierPath];
+            [bar setLineCapStyle:NSLineCapStyleRound];
+            [bar setLineWidth:0.92];
+            [bar moveToPoint:NSMakePoint(xs[i], 9.0 - halfHeights[i])];
+            [bar lineToPoint:NSMakePoint(xs[i], 9.0 + halfHeights[i])];
+            [bar stroke];
+        }
+        return YES;
+    }];
+    [logo setTemplate:NO];
+    return logo;
+}
+
 - (void)setupMenuBarStatusItem {
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
     NSStatusBarButton *button = self.statusItem.button;
     if (button) {
-        if (@available(macOS 11.0, *)) {
-            NSImage *micIcon = [NSImage imageWithSystemSymbolName:@"mic.fill" accessibilityDescription:@"OPUNG"];
-            if (micIcon) {
-                [micIcon setTemplate:YES];
-                button.image = micIcon;
-                button.imagePosition = NSImageLeft;
-            }
+        NSImage *logoIcon = [self createOpungMenuBarLogoIcon];
+        if (logoIcon) {
+            button.image = logoIcon;
+            button.imagePosition = NSImageOnly;
         }
-        button.title = @" OPUNG";
+        button.title = @"";
         button.toolTip = @"OPUNG — Klik untuk membuka panel Peredam Bising (Menu Bar)";
         button.target = self;
         button.action = @selector(toggleMenuBarWindow:);
@@ -1877,10 +1910,29 @@ function run(argv) {
     win.backgroundColor = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.035, 0.05, 0.086, 1.0);
   } catch (_e) {}
 
+  let htmlPathNs = null;
   try {
-    const statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength(-1);
+    if (argv && argv.length > 0 && argv[0]) {
+      htmlPathNs = $(String(argv[0]));
+    } else {
+      const env = $.NSProcessInfo.processInfo.environment;
+      htmlPathNs = env.objectForKey($('OPUNG_HTML_FILE'));
+    }
+  } catch (_e) {}
+
+  try {
+    const statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength(-2);
     if (statusItem && statusItem.button) {
-      statusItem.button.title = $('🎙️ OPUNG');
+      statusItem.button.title = $('');
+      if (htmlPathNs) {
+        const resDir = htmlPathNs.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+        const iconPath = resDir.stringByAppendingPathComponent($('AppIcon.icns'));
+        const menuIcon = $.NSImage.alloc.initWithContentsOfFile(iconPath);
+        if (menuIcon) {
+          menuIcon.setSize($.NSMakeSize(18, 18));
+          statusItem.button.image = menuIcon;
+        }
+      }
     }
   } catch (_e) {}
 
@@ -1900,13 +1952,6 @@ function run(argv) {
   app.activateIgnoringOtherApps(true);
 
   try {
-    let htmlPathNs = null;
-    if (argv && argv.length > 0 && argv[0]) {
-      htmlPathNs = $(String(argv[0]));
-    } else {
-      const env = $.NSProcessInfo.processInfo.environment;
-      htmlPathNs = env.objectForKey($('OPUNG_HTML_FILE'));
-    }
     if (htmlPathNs) {
       const data = $.NSData.dataWithContentsOfFile(htmlPathNs);
       if (data) {
@@ -2073,7 +2118,7 @@ launch_native_detached() {
   local BIN_PATH="$1"
   local HTML_ARG="$2"
 
-  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 2>/dev/null || true
+  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 RNNoiseStudioNativeV15 2>/dev/null || true
 
   if [ -x "/usr/bin/perl" ]; then
     /usr/bin/perl -MPOSIX -e '
@@ -2103,10 +2148,10 @@ launch_native_detached() {
 SHADOW_BUNDLE="/tmp/OPUNG-Runtime-$(id -u)/OPUNG.app"
 SHADOW_MACOS_DIR="$SHADOW_BUNDLE/Contents/MacOS"
 SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
-SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV14"
-LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV14"
+SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV15"
+LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV15"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary V14 sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V15 sudah ada di bundle lokal atau di /tmp shadow bundle
 if [ -x "$LOCAL_BIN" ]; then
   launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi

@@ -85,12 +85,48 @@ export default function App() {
   const demoAudioCtxRef = useRef<AudioContext | null>(null);
   const demoNoiseGainRef = useRef<GainNode | null>(null);
   const demoVoicePresenceRef = useRef<BiquadFilterNode | null>(null);
+  const demoVoiceWarmthRef = useRef<BiquadFilterNode | null>(null);
   const demoTimerRef = useRef<number | null>(null);
+  const isPlayingDemoRef = useRef<boolean>(false);
+  const demoOpungActiveRef = useRef<boolean>(demoOpungActive);
+  const rawMp3CacheRef = useRef<Record<string, ArrayBuffer>>({});
+
+  useEffect(() => {
+    demoOpungActiveRef.current = demoOpungActive;
+  }, [demoOpungActive]);
+
+  // Preload file rekaman suara manusia Bahasa Indonesia asli agar saat tombol diklik langsung berputar instan
+  useEffect(() => {
+    const urls = [
+      '/demo-voice-office-chatter.mp3',
+      '/demo-voice-drill-keyboard.mp3',
+      '/demo-voice-speaker-echo.mp3',
+      '/demo-bg-chatter.mp3',
+    ];
+    urls.forEach((url) => {
+      fetch(url)
+        .then((res) => (res.ok ? res.arrayBuffer() : null))
+        .then((buf) => {
+          if (buf) {
+            rawMp3CacheRef.current[url] = buf;
+          }
+        })
+        .catch(() => {});
+    });
+  }, []);
 
   const stopDemoAudio = () => {
+    isPlayingDemoRef.current = false;
     if (demoTimerRef.current) {
       window.clearInterval(demoTimerRef.current);
       demoTimerRef.current = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore
+      }
     }
     if (demoAudioCtxRef.current) {
       demoAudioCtxRef.current.close().catch(() => {});
@@ -98,6 +134,7 @@ export default function App() {
     }
     demoNoiseGainRef.current = null;
     demoVoicePresenceRef.current = null;
+    demoVoiceWarmthRef.current = null;
     setIsPlayingDemo(false);
   };
 
@@ -107,26 +144,52 @@ export default function App() {
     };
   }, []);
 
-  // Dynamically update noise gain & Studio HD vocal clarity when user flips the toggle during playback
+  // Dynamically update background noise gain & Studio HD Vocal EQ when user flips Tanpa OPUNG vs OPUNG Aktif
   useEffect(() => {
     const ctx = demoAudioCtxRef.current;
     if (!ctx) return;
     const now = ctx.currentTime;
     if (demoNoiseGainRef.current) {
       demoNoiseGainRef.current.gain.setTargetAtTime(
-        demoOpungActive ? 0.0 : 0.28,
+        demoOpungActive ? 0.0 : 0.65,
         now,
-        0.04
+        0.035
       );
     }
     if (demoVoicePresenceRef.current) {
       demoVoicePresenceRef.current.gain.setTargetAtTime(
-        demoOpungActive ? 4.5 : -2.0,
+        demoOpungActive ? 3.5 : -2.5,
+        now,
+        0.04
+      );
+    }
+    if (demoVoiceWarmthRef.current) {
+      demoVoiceWarmthRef.current.gain.setTargetAtTime(
+        demoOpungActive ? 2.5 : -1.5,
         now,
         0.04
       );
     }
   }, [demoOpungActive]);
+
+  const loadAudioBuffer = async (
+    ctx: AudioContext,
+    url: string
+  ): Promise<AudioBuffer | null> => {
+    try {
+      let raw = rawMp3CacheRef.current[url];
+      if (!raw) {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        raw = await res.arrayBuffer();
+        rawMp3CacheRef.current[url] = raw;
+      }
+      // Clone ArrayBuffer because decodeAudioData detaches the buffer in some browsers
+      return await ctx.decodeAudioData(raw.slice(0));
+    } catch {
+      return null;
+    }
+  };
 
   const startDemoAudio = async (scenarioId: DemoScenarioId) => {
     stopDemoAudio();
@@ -140,92 +203,176 @@ export default function App() {
         await ctx.resume();
       }
       demoAudioCtxRef.current = ctx;
+      isPlayingDemoRef.current = true;
+      setIsPlayingDemo(true);
 
-      // 1. Synthesize Realistic Human-Like Formant Cadence (Near-Field Speaker at 0.5m)
-      const voiceFundamental = ctx.createOscillator();
-      const voiceHarmonic = ctx.createOscillator();
-      voiceFundamental.type = 'sawtooth';
-      voiceHarmonic.type = 'triangle';
-      voiceFundamental.frequency.value = 145;
-      voiceHarmonic.frequency.value = 290;
+      const voiceUrlMap: Record<DemoScenarioId, string> = {
+        'office-chatter': '/demo-voice-office-chatter.mp3',
+        'drill-keyboard': '/demo-voice-drill-keyboard.mp3',
+        'speaker-echo': '/demo-voice-speaker-echo.mp3',
+      };
 
-      const formantFilter = ctx.createBiquadFilter();
-      formantFilter.type = 'bandpass';
-      formantFilter.frequency.value = 950;
-      formantFilter.Q.value = 2.2;
+      const voiceBuffer =
+        (await loadAudioBuffer(ctx, voiceUrlMap[scenarioId])) ||
+        (await loadAudioBuffer(ctx, '/demo-voice-id.mp3'));
 
-      const presenceBoost = ctx.createBiquadFilter();
-      presenceBoost.type = 'peaking';
-      presenceBoost.frequency.value = 3200;
-      presenceBoost.gain.value = demoOpungActive ? 4.5 : -2.0;
-      demoVoicePresenceRef.current = presenceBoost;
+      if (!isPlayingDemoRef.current || demoAudioCtxRef.current !== ctx) {
+        return;
+      }
 
-      const voiceEnvelope = ctx.createGain();
-      voiceEnvelope.gain.value = 0.14;
+      // Master Noise / Interference Gain (0.0 saat OPUNG Aktif, 0.65 saat Tanpa OPUNG)
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.value = demoOpungActiveRef.current ? 0.0 : 0.65;
+      demoNoiseGainRef.current = noiseGain;
+      noiseGain.connect(ctx.destination);
 
-      voiceFundamental.connect(formantFilter);
-      voiceHarmonic.connect(formantFilter);
-      formantFilter.connect(presenceBoost);
-      presenceBoost.connect(voiceEnvelope);
-      voiceEnvelope.connect(ctx.destination);
+      // 1. Putar Rekaman Suara Manusia Bahasa Indonesia Asli (Vokal Utama <= 1.0m)
+      let voiceSourceNode: AudioBufferSourceNode | null = null;
+      if (voiceBuffer) {
+        const voiceSource = ctx.createBufferSource();
+        voiceSource.buffer = voiceBuffer;
+        voiceSource.loop = true;
 
-      // 2. Synthesize Scenario-Specific Background Noise (1.8m Chatter / Drill / Speaker Echo)
-      const bufferSize = ctx.sampleRate * 2;
-      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const data = noiseBuffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        if (scenarioId === 'drill-keyboard') {
-          // High-frequency drill buzz + rapid click transients
-          const drill = Math.sin(i * 0.42) * 0.5 + (Math.random() * 2 - 1) * 0.5;
-          const click = i % 3800 < 45 ? (Math.random() * 2 - 1) * 1.8 : 0;
-          data[i] = drill * 0.6 + click;
-        } else if (scenarioId === 'office-chatter') {
-          // Mid-band babble modulation
-          const mod = 0.5 + 0.5 * Math.sin(i * 0.0014) * Math.cos(i * 0.0006);
-          data[i] = (Math.random() * 2 - 1) * mod;
-        } else {
-          // Speaker echo metallic resonance
-          const echoMod = Math.sin(i * 0.08) * Math.sin(i * 0.0009);
-          data[i] = echoMod * 0.8 + (Math.random() * 2 - 1) * 0.25;
+        const voiceWarmth = ctx.createBiquadFilter();
+        voiceWarmth.type = 'peaking';
+        voiceWarmth.frequency.value = 210;
+        voiceWarmth.Q.value = 1.1;
+        voiceWarmth.gain.value = demoOpungActiveRef.current ? 2.5 : -1.5;
+        demoVoiceWarmthRef.current = voiceWarmth;
+
+        const voicePresence = ctx.createBiquadFilter();
+        voicePresence.type = 'peaking';
+        voicePresence.frequency.value = 3200;
+        voicePresence.Q.value = 1.2;
+        voicePresence.gain.value = demoOpungActiveRef.current ? 3.5 : -2.5;
+        demoVoicePresenceRef.current = voicePresence;
+
+        const voiceMasterGain = ctx.createGain();
+        voiceMasterGain.gain.value = 1.05;
+
+        voiceSource.connect(voiceWarmth);
+        voiceWarmth.connect(voicePresence);
+        voicePresence.connect(voiceMasterGain);
+        voiceMasterGain.connect(ctx.destination);
+
+        voiceSource.start(0);
+        voiceSourceNode = voiceSource;
+      }
+
+      // 2. Bangun Suara Pengganggu Latar Sesuai Skenario (Tanpa Nada Robot / Sine Oscillator)
+      if (scenarioId === 'office-chatter') {
+        // Skenario 1: Suara rekan kerja mengobrol di meja sebelah (> 1.5 meter) + suasana ruang kantor
+        const chatterBuffer = await loadAudioBuffer(ctx, '/demo-bg-chatter.mp3');
+        if (chatterBuffer && isPlayingDemoRef.current && demoAudioCtxRef.current === ctx) {
+          const chatterSource = ctx.createBufferSource();
+          chatterSource.buffer = chatterBuffer;
+          chatterSource.loop = true;
+
+          const chatterGain = ctx.createGain();
+          chatterGain.gain.value = 0.85;
+          chatterSource.connect(chatterGain);
+          chatterGain.connect(noiseGain);
+          chatterSource.start(0);
+        }
+
+        // Tambahan desis AC ruangan kantor halus (1/f Pink Noise murni tanpa nada)
+        const roomBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+        const roomData = roomBuf.getChannelData(0);
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        for (let i = 0; i < roomData.length; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.96900 * b2 + white * 0.1538520;
+          b3 = 0.86650 * b3 + white * 0.3104856;
+          b4 = 0.55000 * b4 + white * 0.5329522;
+          b5 = -0.7616 * b5 - white * 0.0168980;
+          roomData[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.025;
+          b6 = white * 0.115926;
+        }
+        const roomSource = ctx.createBufferSource();
+        roomSource.buffer = roomBuf;
+        roomSource.loop = true;
+        roomSource.connect(noiseGain);
+        roomSource.start(0);
+      } else if (scenarioId === 'drill-keyboard') {
+        // Skenario 2: Ketikan mechanical keyboard cepat + deru kipas/konstruksi akustik (murni transien tanpa sine wave)
+        const kbBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+        const kbData = kbBuf.getChannelData(0);
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        let brown = 0;
+        for (let i = 0; i < kbData.length; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.96900 * b2 + white * 0.1538520;
+          b3 = 0.86650 * b3 + white * 0.3104856;
+          b4 = 0.55000 * b4 + white * 0.5329522;
+          b5 = -0.7616 * b5 - white * 0.0168980;
+          const pink = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.04;
+          b6 = white * 0.115926;
+          brown = (brown + 0.02 * white) / 1.02;
+
+          const tSec = i / ctx.sampleRate;
+          // Pola ketikan tombol mechanical switch (klik tajam + bottom-out thock)
+          const stepRate = 6.8;
+          const keyIdx = Math.floor(tSec * stepRate);
+          const keyPhase = tSec * stepRate - keyIdx;
+          const activeKey = (keyIdx * 13 + 5) % 4 !== 0;
+          const clickSwitch = activeKey && keyPhase < 0.008 ? Math.exp(-keyPhase * 450) * 0.65 : 0;
+          const bottomOut = activeKey && keyPhase >= 0.008 && keyPhase < 0.035 ? Math.exp(-(keyPhase - 0.008) * 140) * 0.45 : 0;
+
+          kbData[i] = pink * 0.75 + brown * 0.32 + white * clickSwitch + pink * 8.0 * bottomOut;
+        }
+        const kbSource = ctx.createBufferSource();
+        kbSource.buffer = kbBuf;
+        kbSource.loop = true;
+
+        const kbFilter = ctx.createBiquadFilter();
+        kbFilter.type = 'bandpass';
+        kbFilter.frequency.value = 1400;
+        kbFilter.Q.value = 0.6;
+
+        kbSource.connect(kbFilter);
+        kbFilter.connect(noiseGain);
+        kbSource.start(0);
+      } else {
+        // Skenario 3: Bocor Suara Speaker Laptop (Echo / Pantulan Gema Ruangan Nyata dari Suara Pembicara)
+        if (voiceSourceNode) {
+          const delay1 = ctx.createDelay(1.0);
+          delay1.delayTime.value = 0.145; // Pantulan dinding 145ms
+
+          const delay2 = ctx.createDelay(1.0);
+          delay2.delayTime.value = 0.275; // Pantulan sudut ruangan 275ms
+
+          const echoFilter = ctx.createBiquadFilter();
+          echoFilter.type = 'bandpass';
+          echoFilter.frequency.value = 850;
+          echoFilter.Q.value = 0.9;
+
+          const echoGain1 = ctx.createGain();
+          echoGain1.gain.value = 0.55;
+
+          const echoGain2 = ctx.createGain();
+          echoGain2.gain.value = 0.35;
+
+          voiceSourceNode.connect(delay1);
+          delay1.connect(echoFilter);
+          echoFilter.connect(echoGain1);
+          echoGain1.connect(noiseGain);
+
+          voiceSourceNode.connect(delay2);
+          delay2.connect(echoGain2);
+          echoGain2.connect(noiseGain);
         }
       }
 
-      const noiseSource = ctx.createBufferSource();
-      noiseSource.buffer = noiseBuffer;
-      noiseSource.loop = true;
-
-      const noiseBand = ctx.createBiquadFilter();
-      noiseBand.type = scenarioId === 'drill-keyboard' ? 'highpass' : 'bandpass';
-      noiseBand.frequency.value = scenarioId === 'drill-keyboard' ? 1800 : 650;
-      noiseBand.Q.value = 1.2;
-
-      const noiseGain = ctx.createGain();
-      noiseGain.gain.value = demoOpungActive ? 0.0 : 0.28;
-      demoNoiseGainRef.current = noiseGain;
-
-      noiseSource.connect(noiseBand);
-      noiseBand.connect(noiseGain);
-      noiseGain.connect(ctx.destination);
-
-      voiceFundamental.start();
-      voiceHarmonic.start();
-      noiseSource.start();
-
-      // Modulate syllable cadence every 140ms so it sounds like natural speech syllables
+      // Animasi grafik spektrum selaras dengan irama suku kata bicara manusia
       let step = 0;
       demoTimerRef.current = window.setInterval(() => {
         step += 1;
         setDemoTick(step);
-        if (!demoAudioCtxRef.current) return;
-        const t = demoAudioCtxRef.current.currentTime;
-        const isSpeakingSyllable = step % 7 !== 0 && step % 5 !== 0;
-        const pitchShift = 138 + (step % 4) * 14;
-        voiceFundamental.frequency.setTargetAtTime(pitchShift, t, 0.03);
-        voiceHarmonic.frequency.setTargetAtTime(pitchShift * 2, t, 0.03);
-        voiceEnvelope.gain.setTargetAtTime(isSpeakingSyllable ? 0.16 : 0.01, t, 0.025);
-      }, 140);
-
-      setIsPlayingDemo(true);
+      }, 120);
     } catch {
       setIsPlayingDemo(false);
     }

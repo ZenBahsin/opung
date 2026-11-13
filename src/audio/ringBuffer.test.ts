@@ -123,8 +123,11 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
   execFileSync('/bin/bash', ['-n', '/tmp/opung_test_launcher.sh']);
   execFileSync('/bin/bash', ['-n', '/tmp/opung_test_installer.sh']);
 
-  // Pastikan kode Objective-C menyertakan NSStatusBar (Menu Bar kanan atas macOS), AppIcon.icns untuk Dock, loadOpungInterface setelah izin AVFoundation, dan tetap aktif saat ditutup
+  // Pastikan kode Objective-C menyertakan NSStatusBar (Menu Bar kanan atas macOS) dengan logo OPUNG saja (tanpa teks "OPUNG"), AppIcon.icns untuk Dock, loadOpungInterface setelah izin AVFoundation, dan tetap aktif saat ditutup
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('NSStatusBar systemStatusBar'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('createOpungMenuBarLogoIcon'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('NSImageOnly'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('button.title = @"";'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('toggleMenuBarWindow:'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('windowShouldClose:'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('loadOpungInterface'));
