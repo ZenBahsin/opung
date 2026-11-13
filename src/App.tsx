@@ -436,10 +436,13 @@ export default function App() {
         >
           <img
             src="/opung-icon.png"
-            alt="Ikon Aplikasi OPUNG"
+            alt="Ikon Aplikasi Opung"
             className="w-7 h-7 rounded-[7px] shadow-md shadow-sky-500/20 border border-sky-400/25"
           />
-          <span>OPUNG</span>
+          <span>Opung</span>
+          <span className="hidden xl:inline-block text-xs font-mono font-medium text-slate-400 tracking-normal">
+            - Office Proximity Ultra Noise Gate
+          </span>
         </a>
 
         {/* Zone 2: 4 Concise Single-Line Product Navigation Links */}
@@ -495,7 +498,7 @@ export default function App() {
             <div className="lg:col-span-7 flex flex-col justify-between">
               <div>
                 <div className="text-xs font-mono uppercase tracking-widest text-sky-400 mb-4">
-                  PEREDAM BISING RADIUS 1 METER &amp; PENJERNIH VOKAL STUDIO HD
+                  Opung - Office Proximity Ultra Noise Gate
                 </div>
 
                 <h1
@@ -510,7 +513,7 @@ export default function App() {
 
                 <p className="text-base sm:text-lg text-slate-300 mt-5 leading-relaxed max-w-[60ch]">
                   Rapat dari kantor terbuka atau ruang kerja ramai tanpa bocor suara.{' '}
-                  <strong className="text-white">OPUNG</strong> mengunci fokus mikrofon hanya pada
+                  <strong className="text-white">Opung</strong> mengunci fokus mikrofon hanya pada
                   radius <strong className="text-sky-300">&le; 1.0 meter</strong> di depan Anda,
                   mengupas bising bor atau ketikan keyboard saat Anda berbicara, dan menjernihkan
                   vokal secara otomatis tanpa tombol pengaturan yang rumit.
@@ -669,11 +672,11 @@ export default function App() {
                 className="font-display text-2xl sm:text-4xl font-bold text-slate-100 mt-1.5 leading-tight"
                 style={{ textWrap: 'balance' }}
               >
-                Dengarkan Bedanya: Tanpa OPUNG vs Dengan OPUNG
+                Dengarkan Bedanya: Tanpa Opung vs Dengan Opung
               </h2>
               <p className="text-sm sm:text-base text-slate-400 mt-2 leading-relaxed">
                 Pilih skenario kebisingan di bawah ini, tekan <strong>Putar Demo Suara</strong>,
-                lalu geser sakelar <strong>OPUNG Aktif</strong> untuk mendengar bagaimana suara
+                lalu geser sakelar <strong>Opung Aktif</strong> untuk mendengar bagaimana suara
                 pengganggu langsung lenyap secara real-time.
               </p>
             </div>
@@ -714,7 +717,7 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* Big Tactile Toggle: Tanpa OPUNG vs OPUNG Aktif */}
+                {/* Big Tactile Toggle: Tanpa Opung vs Opung Aktif */}
                 <div className="p-4 rounded-xl border border-slate-800 bg-[#080B11] space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-slate-300">
@@ -730,7 +733,7 @@ export default function App() {
                             : 'text-slate-400 hover:text-slate-200'
                         }`}
                       >
-                        Tanpa OPUNG
+                        Tanpa Opung
                       </button>
                       <button
                         type="button"
@@ -741,7 +744,7 @@ export default function App() {
                             : 'text-slate-400 hover:text-slate-200'
                         }`}
                       >
-                        OPUNG Aktif
+                        Opung Aktif
                       </button>
                     </div>
                   </div>
@@ -1243,11 +1246,12 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-slate-400">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>OPUNG · 100% Pemrosesan Audio Lokal di Perangkat Anda (48 kHz Studio HD)</span>
+            <span>Opung - Office Proximity Ultra Noise Gate · Versi 1.0</span>
           </div>
-          <div className="flex items-center gap-2 text-slate-500">
-            <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-            <span>Untuk macOS, Google Meet, Zoom &amp; Microsoft Teams</span>
+          <div className="flex items-center gap-1.5 text-slate-400">
+            <span>&copy; Opung &middot; Made with</span>
+            <span className="text-rose-500" aria-label="love">&hearts;</span>
+            <span className="font-semibold text-slate-200">Muhammad Zen</span>
           </div>
         </div>
       </footer>

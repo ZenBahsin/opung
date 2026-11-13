@@ -578,7 +578,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         if (audioEl.paused) {
           await audioEl.play().catch(() => {});
         }
-        setSinkConnectedText('AKTIF KE BLACKHOLE 2CH ✓');
+        setSinkConnectedText('Terhubung ke BlackHole 2ch ✓');
         return;
       }
 
@@ -599,9 +599,9 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             audioEl.volume = 1.0;
             audioEl.muted = false;
             await audioEl.play().catch(() => {});
-            setSinkConnectedText('AKTIF KE BLACKHOLE 2CH ✓');
+            setSinkConnectedText('Terhubung ke BlackHole 2ch ✓');
           } else {
-            setSinkConnectedText('Siap ke BlackHole 2ch ✓');
+            setSinkConnectedText('Terhubung ke BlackHole 2ch ✓');
           }
         } else {
           // JANGAN PERNAH unmute jika setSinkId tidak didukung, karena akan bocor ke Earphone Default!
@@ -1338,7 +1338,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-800/80">
         <div>
           <div className="text-xs font-mono text-sky-400 mb-2">
-            APLIKASI MENU BAR MACOS + BLACKHOLE 2CH VIRTUAL MIC · 48 KHZ STUDIO HD
+            OPUNG — OFFICE PROXIMITY ULTRA NOISE GATE · MENU BAR MACOS + BLACKHOLE 2CH
           </div>
           <h2
             className="font-display text-2xl sm:text-3xl font-bold text-slate-100 tracking-tight"
@@ -1349,7 +1349,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           <p className="text-sm text-slate-400 mt-2 max-w-2xl leading-relaxed">
             Begitu dipasang dari <strong className="text-sky-300">OPUNG-Installer.dmg</strong> ke{' '}
             <strong className="text-slate-200">Applications</strong>,{' '}
-            <strong className="text-sky-300">logo OPUNG</strong> langsung muncul di{' '}
+            <strong className="text-sky-300">logo Opung</strong> langsung muncul di{' '}
             <strong className="text-slate-200">Menu Bar kanan atas macOS (samping baterai/Wi-Fi)</strong>{' '}
             dan mengalirkan suara jernih Anda ke <strong className="text-emerald-300">BlackHole 2ch</strong>{' '}
             untuk Google Meet &amp; Zoom.
@@ -1363,7 +1363,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold bg-sky-400 hover:bg-sky-300 text-slate-950 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
             <Download className="w-4 h-4 shrink-0" />
-            Unduh OPUNG-Installer.dmg
+            Unduh Opung (.dmg)
           </button>
 
           <button
@@ -1392,7 +1392,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           <div className="space-y-1">
             <div className="font-semibold text-emerald-300">{downloadBanner}</div>
             <div className="text-slate-300">
-              Saat pertama kali membuka aplikasi OPUNG di Applications, cukup{' '}
+              Saat pertama kali membuka aplikasi Opung di Applications, cukup{' '}
               <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>.
             </div>
           </div>
@@ -1407,17 +1407,17 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             focusedAppMode ? 'lg:col-span-12' : 'lg:col-span-5'
           } flex flex-col items-center`}
         >
-          {/* Simulated macOS Top Menu Bar Strip (Showing ONLY the OPUNG Logo Icon in Status Bar) */}
+          {/* Simulated macOS Top Menu Bar Strip (Showing ONLY the Opung Logo Icon in Status Bar) */}
           <div className="w-full max-w-[390px] mb-2 px-3.5 py-1.5 rounded-lg bg-[#161D2E]/90 border border-slate-700/70 flex items-center justify-between text-[11px] text-slate-300 select-none">
             <span className="text-slate-400 font-medium">macOS Menu Bar</span>
             <div className="flex items-center gap-3">
               <span
-                title="Logo OPUNG di Menu Bar macOS (Tanpa Teks)"
+                title="Logo Opung di Menu Bar macOS (Tanpa Teks)"
                 className="inline-flex items-center justify-center p-1 rounded bg-sky-400/15 border border-sky-400/40"
               >
                 <img
                   src="/opung-icon.png"
-                  alt="Logo OPUNG Menu Bar"
+                  alt="Logo Opung Menu Bar"
                   className="w-4 h-4 rounded-[3.5px]"
                 />
               </span>
@@ -1427,25 +1427,21 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
           <div className="w-full max-w-[390px] rounded-2xl border border-slate-700/80 bg-[#0A0E17] shadow-2xl overflow-hidden">
             {/* Native macOS Window Titlebar */}
-            <div className="flex items-center justify-between px-4 py-3 bg-[#111726] border-b border-slate-800/90 select-none">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between px-3.5 py-3 bg-[#111726] border-b border-slate-800/90 select-none gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <span className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] inline-block" />
                 <span className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] inline-block" />
                 <span className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] inline-block" />
               </div>
-              <div className="inline-flex items-center gap-1.5 text-xs font-bold tracking-tight text-slate-100 font-display">
+              <div className="inline-flex items-center gap-1.5 text-[11px] font-bold tracking-tight text-slate-100 font-display truncate">
                 <img
                   src="/opung-icon.png"
                   alt=""
-                  className="w-4 h-4 rounded-[4px] border border-sky-400/30"
+                  className="w-4 h-4 rounded-[4px] border border-sky-400/30 shrink-0"
                 />
-                <span>OPUNG — Menu Bar AI</span>
+                <span className="truncate">Opung - Office Proximity Ultra Noise Gate</span>
               </div>
-              <div className="text-[11px] font-mono text-sky-400 tabular-nums">
-                {vocalClarityEnabled && krispModeEnabled && speakerEchoGuardEnabled
-                  ? '48kHz Studio HD'
-                  : 'Standar'}
-              </div>
+              <div className="w-4 shrink-0" />
             </div>
 
             {/* Clean Krisp-Inspired App Body */}
@@ -1560,7 +1556,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                       <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
                       Output ke Meet / Zoom
                     </span>
-                    <span className="text-[10px] text-emerald-400 font-mono">
+                    <span className="text-[9px] text-emerald-400 font-mono font-normal tracking-tight">
                       {sinkConnectedText}
                     </span>
                   </div>
@@ -1718,6 +1714,20 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                   ? 'Tes Dengar Suara Sendiri: Aktif (Gunakan Earphone)'
                   : 'Tes Dengar Suara Sendiri (Gunakan Earphone)'}
               </button>
+
+              {/* 6. Copyright & Version Footer below Loopback Test Button */}
+              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between text-[10px] text-slate-400 select-none">
+                <span className="inline-flex items-center gap-1">
+                  <span>&copy; Opung &middot; Made with</span>
+                  <span className="text-rose-500 text-[11px]" aria-label="love">
+                    &hearts;
+                  </span>
+                  <span className="font-semibold text-slate-300">Muhammad Zen</span>
+                </span>
+                <span className="font-mono text-[9.5px] text-slate-400">
+                  Versi 1.0
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -1731,7 +1741,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                   OTOMATIS TANPA KONFIGURASI RUMIT
                 </div>
                 <h3 className="font-display text-lg sm:text-xl font-bold text-slate-100">
-                  4 Mesin Pintar yang Langsung Aktif Begitu Sakelar OPUNG Dinyalakan
+                  4 Mesin Pintar yang Langsung Aktif Begitu Sakelar Opung Dinyalakan
                 </h3>
               </div>
 

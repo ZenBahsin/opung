@@ -24,25 +24,25 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OPUNG — Peredam Bising &amp; Fokus Suara</title>
+  <title>Opung - Office Proximity Ultra Noise Gate</title>
   <style>
     * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
     body {
       margin: 0;
-      padding: 16px;
+      padding: 14px 16px;
       background: #090d16;
       color: #f8fafc;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
     }
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding-bottom: 10px;
+      padding-bottom: 9px;
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
     }
     .brand {
@@ -62,7 +62,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       box-shadow: 0 2px 8px rgba(14, 165, 233, 0.25);
     }
     .engine-meta {
-      font-size: 11px;
+      font-size: 10.5px;
       color: #94a3b8;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
@@ -146,6 +146,13 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       font-size: 10px;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       color: #38bdf8;
+    }
+    .sink-status {
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #34d399;
     }
     select {
       width: 100%;
@@ -270,6 +277,31 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       border-color: rgba(16, 185, 129, 0.5);
       color: #34d399;
     }
+    .app-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 6px;
+      margin-top: 2px;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+      font-size: 10px;
+      color: #64748b;
+    }
+    .app-footer .heart-icon {
+      color: #f43f5e;
+      font-size: 11px;
+      display: inline-block;
+      margin: 0 1px;
+    }
+    .app-footer .author-name {
+      color: #cbd5e1;
+      font-weight: 600;
+    }
+    .app-footer .ver-badge {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 9.5px;
+      color: #94a3b8;
+    }
   </style>
 </head>
 <body>
@@ -285,9 +317,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         <rect x="35.8" y="25.5" width="2.4" height="13" rx="1.2" fill="#67E8F9"/>
         <rect x="39.6" y="29" width="2.4" height="6" rx="1.2" fill="#38BDF8"/>
       </svg>
-      <span>OPUNG</span>
+      <span>Opung</span>
     </span>
-    <span id="engineStatus" class="engine-meta">HD Voice · Neural AI · &le; 1.0m</span>
+    <span id="engineStatus" class="engine-meta">Office Proximity Ultra Noise Gate</span>
   </div>
 
   <!-- Krisp-Style Single Master Switch -->
@@ -313,7 +345,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     <div>
       <div class="field-header">
         <span>Output ke Google Meet / Zoom</span>
-        <span id="sinkBadge" class="field-status">Otomatis</span>
+        <span id="sinkBadge" class="sink-status">Otomatis</span>
       </div>
       <select id="virtualOutputSelect" aria-label="Pilih Output Virtual"></select>
     </div>
@@ -355,6 +387,12 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
   <button id="loopbackBtn" class="test-btn" type="button">
     Tes Dengar Suara Sendiri (Gunakan Earphone)
   </button>
+
+  <!-- Copyright & Version Footer -->
+  <div class="app-footer">
+    <span>&copy; Opung &middot; Made with <span class="heart-icon">&hearts;</span> <span class="author-name">Muhammad Zen</span></span>
+    <span class="ver-badge">Versi 1.0</span>
+  </div>
 
   <audio id="virtualCableAudioOut" playsinline muted></audio>
   <audio id="earphoneLoopbackOut" playsinline muted></audio>
@@ -703,13 +741,13 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         toggleBtn.className = 'toggle-track active';
         statusText.textContent = 'Peredam Bising & Fokus Suara Aktif';
         hintText.textContent = 'Otomatis menjernihkan suara HD, mengupas bising latar & memblokir obrolan > 1m';
-        document.title = 'OPUNG — Aktif';
+        document.title = 'Opung - Office Proximity Ultra Noise Gate';
       } else {
         heroSwitchCard.className = 'hero-switch-card';
         toggleBtn.className = 'toggle-track';
         statusText.textContent = 'Peredam Bising Dimatikan (Bypass)';
         hintText.textContent = 'Semua suara sekitar masuk ke mikrofon tanpa penyaringan.';
-        document.title = 'OPUNG — Nonaktif';
+        document.title = 'Opung - Office Proximity Ultra Noise Gate (Bypass)';
       }
     });
 
@@ -1208,7 +1246,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           earphoneLoopbackOut.srcObject = null;
         }
 
-        document.getElementById('engineStatus').textContent = 'DSP 48kHz · Radius 1m';
+        document.getElementById('engineStatus').textContent = 'Office Proximity Ultra Noise Gate';
         await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
       } catch (err) {
         document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
@@ -1666,14 +1704,14 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     [NSApp setMainMenu:menubar];
 
     NSMenu *appMenu = [[NSMenu alloc] init];
-    NSMenuItem *toggleItem = [[NSMenuItem alloc] initWithTitle:@"Tampilkan / Sembunyikan Panel OPUNG"
+    NSMenuItem *toggleItem = [[NSMenuItem alloc] initWithTitle:@"Tampilkan / Sembunyikan Panel Opung"
                                                         action:@selector(toggleMenuBarWindow:)
                                                  keyEquivalent:@"o"];
     [toggleItem setTarget:self];
     [appMenu addItem:toggleItem];
     [appMenu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Keluar dari OPUNG"
+    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Keluar dari Opung"
                                                       action:@selector(terminate:)
                                                keyEquivalent:@"q"];
     [appMenu addItem:quitItem];
@@ -1726,7 +1764,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
             button.imagePosition = NSImageOnly;
         }
         button.title = @"";
-        button.toolTip = @"OPUNG — Klik untuk membuka panel Peredam Bising (Menu Bar)";
+        button.toolTip = @"Opung - Office Proximity Ultra Noise Gate";
         button.target = self;
         button.action = @selector(toggleMenuBarWindow:);
     }
@@ -1788,10 +1826,10 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
         [NSApp setApplicationIconImage:appIcon];
     }
 
-    NSRect frame = NSMakeRect(0, 0, 390, 620);
+    NSRect frame = NSMakeRect(0, 0, 390, 645);
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
     self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:style backing:NSBackingStoreBuffered defer:NO];
-    [self.window setTitle:@"OPUNG — Peredam Bising & Fokus Suara"];
+    [self.window setTitle:@"Opung - Office Proximity Ultra Noise Gate"];
     [self.window center];
     [self.window setDelegate:self];
     [self.window setReleasedWhenClosed:NO];
@@ -1894,7 +1932,7 @@ function run(argv) {
   const app = $.NSApplication.sharedApplication;
   app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
 
-  const rect = $.NSMakeRect(0, 0, 390, 620);
+  const rect = $.NSMakeRect(0, 0, 390, 645);
   const styleMask = (1 << 0) | (1 << 1) | (1 << 2);
   const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
     rect,
@@ -1903,7 +1941,7 @@ function run(argv) {
     false
   );
   win.center;
-  win.title = $('OPUNG — Peredam Bising & Fokus Suara');
+  win.title = $('Opung - Office Proximity Ultra Noise Gate');
   win.releasedWhenClosed = false;
   win.level = 3;
   try {
@@ -2118,7 +2156,7 @@ launch_native_detached() {
   local BIN_PATH="$1"
   local HTML_ARG="$2"
 
-  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 RNNoiseStudioNativeV15 2>/dev/null || true
+  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 RNNoiseStudioNativeV15 RNNoiseStudioNativeV16 2>/dev/null || true
 
   if [ -x "/usr/bin/perl" ]; then
     /usr/bin/perl -MPOSIX -e '
@@ -2139,7 +2177,7 @@ launch_native_detached() {
 
   (
     sleep 0.35
-    /usr/bin/osascript -e 'tell application "Terminal" to close (every window whose name contains "opung_tcc_bridge" or name contains "OPUNG" or name contains "RNNoiseStudio")' 2>/dev/null || true
+    /usr/bin/osascript -e 'tell application "Terminal" to close (every window whose name contains "opung_tcc_bridge" or name contains "OPUNG" or name contains "Opung" or name contains "RNNoiseStudio")' 2>/dev/null || true
   ) </dev/null >/dev/null 2>&1 &
 
   exit 0
@@ -2148,10 +2186,10 @@ launch_native_detached() {
 SHADOW_BUNDLE="/tmp/OPUNG-Runtime-$(id -u)/OPUNG.app"
 SHADOW_MACOS_DIR="$SHADOW_BUNDLE/Contents/MacOS"
 SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
-SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV15"
-LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV15"
+SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV16"
+LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV16"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary V15 sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V16 sudah ada di bundle lokal atau di /tmp shadow bundle
 if [ -x "$LOCAL_BIN" ]; then
   launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi
@@ -2491,21 +2529,21 @@ export const MACOS_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleIdentifier</key>
   <string>com.opung.desktop.v12</string>
   <key>CFBundleName</key>
-  <string>OPUNG</string>
+  <string>Opung</string>
   <key>CFBundleDisplayName</key>
-  <string>OPUNG</string>
+  <string>Opung</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>12.0.0</string>
+  <string>1.0</string>
   <key>CFBundleVersion</key>
-  <string>12000</string>
+  <string>100</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>OPUNG membutuhkan akses mikrofon untuk memfilter suara di luar radius 1 meter dan menjernihkan vokal Anda.</string>
+  <string>Opung membutuhkan akses mikrofon untuk memfilter suara di luar radius 1 meter dan menjernihkan vokal Anda.</string>
 </dict>
 </plist>`;
 
