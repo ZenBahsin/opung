@@ -46,10 +46,20 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
     }
     .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       font-size: 15px;
       font-weight: 800;
       letter-spacing: -0.02em;
       color: #ffffff;
+    }
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(14, 165, 233, 0.25);
     }
     .engine-meta {
       font-size: 11px;
@@ -264,7 +274,19 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 </head>
 <body>
   <div class="header">
-    <span class="brand">OPUNG</span>
+    <span class="brand">
+      <svg class="brand-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="64" height="64" rx="15" fill="#0B1325"/>
+        <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" stroke="#38BDF8" stroke-opacity="0.35" stroke-width="1.5"/>
+        <circle cx="32" cy="32" r="18" stroke="#F0F9FF" stroke-width="7.5"/>
+        <rect x="24" y="29" width="2.4" height="6" rx="1.2" fill="#38BDF8"/>
+        <rect x="27.8" y="25.5" width="2.4" height="13" rx="1.2" fill="#67E8F9"/>
+        <rect x="31.6" y="22" width="2.8" height="20" rx="1.4" fill="#38BDF8"/>
+        <rect x="35.8" y="25.5" width="2.4" height="13" rx="1.2" fill="#67E8F9"/>
+        <rect x="39.6" y="29" width="2.4" height="6" rx="1.2" fill="#38BDF8"/>
+      </svg>
+      <span>OPUNG</span>
+    </span>
     <span id="engineStatus" class="engine-meta">HD Voice · Neural AI · &le; 1.0m</span>
   </div>
 
@@ -714,7 +736,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       });
     }
 
-    async function populateMacAudioDevices(activeInputDeviceId) {
+    let labelRetryCount = 0;
+
+    async function populateMacAudioDevices(activeInputDeviceId, activeTrackLabel) {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputs = devices.filter((d) => d.kind === 'audioinput');
       const outputs = devices.filter(
@@ -725,17 +749,34 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       );
 
       micInputSelect.innerHTML = '';
-      inputs.forEach((d) => {
+      inputs.forEach((d, idx) => {
         const opt = document.createElement('option');
         opt.value = d.deviceId;
-        const isVirtIn = isOpungOrBlackHoleInputLabel(d.label);
+        const resolvedLabel =
+          d.label ||
+          (idx === 0 && activeTrackLabel ? activeTrackLabel : '') ||
+          (d.deviceId && d.deviceId !== 'default'
+            ? 'Mikrofon MacBook (' + d.deviceId.slice(0, 6) + ')'
+            : 'Mikrofon Internal MacBook');
+        const isVirtIn = isOpungOrBlackHoleInputLabel(resolvedLabel);
         opt.textContent = isVirtIn
-          ? d.label + ' (Jangan Pilih Sebagai Input Fisik)'
-          : d.label || 'Mikrofon ' + d.deviceId.slice(0, 6);
+          ? resolvedLabel + ' (Jangan Pilih Sebagai Input Fisik)'
+          : resolvedLabel;
         micInputSelect.appendChild(opt);
       });
       if (activeInputDeviceId) {
         micInputSelect.value = activeInputDeviceId;
+      }
+
+      if (
+        labelRetryCount < 4 &&
+        inputs.length > 0 &&
+        inputs.every((d) => !d.label || d.label.trim() === '')
+      ) {
+        labelRetryCount++;
+        setTimeout(() => {
+          startMacAudioPipeline(activeInputDeviceId);
+        }, 550);
       }
 
       virtualOutputSelect.innerHTML = '';
@@ -759,7 +800,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           opt.disabled = true;
           opt.textContent = d.label + ' (Speaker/Earphone Fisik - Diblokir)';
         } else {
-          opt.textContent = d.label || 'Output ' + d.deviceId.slice(0, 6);
+          opt.textContent = d.label || 'Output Audio (' + (d.deviceId ? d.deviceId.slice(0, 6) : 'Default') + ')';
         }
         virtualOutputSelect.appendChild(opt);
       });
@@ -785,18 +826,23 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         let targetInputId = selectedInputId;
         const useHardwareAec = !loopbackAudible;
 
-        let stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: targetInputId ? { exact: targetInputId } : undefined,
-            sampleRate: { ideal: 48000 },
-            channelCount: { ideal: 1 },
-            echoCancellation: useHardwareAec,
-            noiseSuppression: true,
-            autoGainControl: false,
-          },
-        });
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId: targetInputId ? { exact: targetInputId } : undefined,
+              sampleRate: { ideal: 48000 },
+              channelCount: { ideal: 1 },
+              echoCancellation: useHardwareAec,
+              noiseSuppression: true,
+              autoGainControl: false,
+            },
+          });
+        } catch (_firstErr) {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
 
-        const firstTrack = stream.getAudioTracks()[0];
+        let firstTrack = stream.getAudioTracks()[0];
         if (firstTrack && firstTrack.label && isOpungOrBlackHoleInputLabel(firstTrack.label)) {
           const allDevs = await navigator.mediaDevices.enumerateDevices();
           const realMic = allDevs.find(
@@ -819,10 +865,16 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
                 autoGainControl: false,
               },
             });
+            firstTrack = stream.getAudioTracks()[0];
           }
         }
 
         currentMicStream = stream;
+        const activeTrackLabel = firstTrack && firstTrack.label ? firstTrack.label : '';
+        const activeSettingsId =
+          firstTrack && typeof firstTrack.getSettings === 'function'
+            ? firstTrack.getSettings().deviceId
+            : '';
 
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
@@ -930,11 +982,27 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           earphoneLoopbackOut.srcObject = null;
         }
 
-        await populateMacAudioDevices(targetInputId);
+        document.getElementById('engineStatus').textContent = 'DSP 48kHz · Radius 1m';
+        await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel);
       } catch (err) {
-        document.getElementById('engineStatus').textContent = 'Izinkan Akses Mikrofon macOS';
+        document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
+        setTimeout(() => {
+          startMacAudioPipeline(selectedInputId);
+        }, 1200);
       }
     }
+
+    ['pointerdown', 'keydown', 'mousemove', 'touchstart'].forEach((evName) => {
+      window.addEventListener(
+        evName,
+        () => {
+          if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+          }
+        },
+        { passive: true }
+      );
+    });
 
     const rawFreq = new Uint8Array(64);
     const cleanFreq = new Uint8Array(64);
@@ -943,6 +1011,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
+
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
 
       const normalizedThresh = Math.max(0.15, Math.min(0.88, (thresholdDb + 50) / 38));
       const thresholdY = h - normalizedThresh * (h - 10);
@@ -1013,7 +1085,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
  * Kode Objective-C Native macOS Cocoa + WebKit (NSStatusItem Menu Bar + NSWindow + WKWebView)
  * - Menampilkan ikon "OPUNG" di Menu Bar kanan atas macOS (dekat Wi-Fi/Baterai/Jam) persis seperti Krisp.ai!
  * - Saat pertama dibuka, jendela muncul tepat di tengah layar (center) agar langsung terlihat jelas.
- * - Saat ikon Menu Bar diklik, jendela OPUNG muncul tepat di bawah ikon Menu Bar (gaya Popover Krisp).
+ * - Memastikan izin mikrofon AVFoundation aktif sebelum memuat antarmuka WebKit agar seluruh mikrofon terdeteksi.
  */
 export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
@@ -1100,9 +1172,28 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     [NSApp activateIgnoringOtherApps:YES];
 }
 
+- (void)loadOpungInterface {
+    NSError *err = nil;
+    NSString *htmlContent = [NSString stringWithContentsOfFile:self.htmlFilePath encoding:NSUTF8StringEncoding error:&err];
+    if (htmlContent && htmlContent.length > 0) {
+        [self.webView loadHTMLString:htmlContent baseURL:[NSURL URLWithString:@"https://localhost/"]];
+    } else {
+        NSURL *fileUrl = [NSURL fileURLWithPath:self.htmlFilePath];
+        NSURL *dirUrl = [fileUrl URLByDeletingLastPathComponent];
+        [self.webView loadFileURL:fileUrl allowingReadAccessToURL:dirUrl];
+    }
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [self setupMainMenu];
     [self setupMenuBarStatusItem];
+
+    NSString *resDir = [[self.htmlFilePath stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
+    NSString *iconPath = [resDir stringByAppendingPathComponent:@"AppIcon.icns"];
+    NSImage *appIcon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+    if (appIcon) {
+        [NSApp setApplicationIconImage:appIcon];
+    }
 
     NSRect frame = NSMakeRect(0, 0, 390, 620);
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
@@ -1124,6 +1215,7 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     @try {
         [config.preferences setValue:@YES forKey:@"mediaDevicesEnabled"];
         [config.preferences setValue:@NO forKey:@"mediaCaptureRequiresSecureConnection"];
+        [config.preferences setValue:@NO forKey:@"getUserMediaRequiresFocus"];
     } @catch (NSException *exception) {}
 
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
@@ -1136,21 +1228,18 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     [self.window orderFrontRegardless];
     [NSApp activateIgnoringOtherApps:YES];
 
-    NSError *err = nil;
-    NSString *htmlContent = [NSString stringWithContentsOfFile:self.htmlFilePath encoding:NSUTF8StringEncoding error:&err];
-    if (htmlContent && htmlContent.length > 0) {
-        [self.webView loadHTMLString:htmlContent baseURL:[NSURL URLWithString:@"https://localhost/"]];
-    } else {
-        NSURL *fileUrl = [NSURL fileURLWithPath:self.htmlFilePath];
-        NSURL *dirUrl = [fileUrl URLByDeletingLastPathComponent];
-        [self.webView loadFileURL:fileUrl allowingReadAccessToURL:dirUrl];
-    }
-
     if (@available(macOS 10.14, *)) {
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {}];
-        });
+        AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+        if (status == AVAuthorizationStatusNotDetermined) {
+            [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self loadOpungInterface];
+                });
+            }];
+            return;
+        }
     }
+    [self loadOpungInterface];
 }
 
 - (void)webView:(WKWebView *)webView
@@ -1276,15 +1365,15 @@ function run(argv) {
 `;
 
 /**
- * Launcher Script Instan (< 0.1 detik) untuk Contents/MacOS/RNNoiseStudio:
- * - Otomatis menyalin OPUNG.app ke /Applications di latar belakang jika dibuka dari .DMG (/Volumes/...)
- * - Otomatis memasang driver virtual "OPUNG Microphone" (OPUNG.driver) di latar belakang
- * - Langsung membuka jendela aplikasi OPUNG + Menu Bar Icon
+ * Launcher Script Instan (< 0.1 detik) untuk Contents/MacOS/OPUNG & RNNoiseStudio:
+ * - Otomatis menyalin OPUNG.app ke /Applications jika dibuka dari .DMG (/Volumes/...)
+ * - Otomatis menjembatani izin mikrofon macOS TCC (Terminal Responsible Process Bridge) saat OPUNG.app
+ *   diklik langsung di Finder / Applications, sehingga seluruh mikrofon fisik & OPUNG Microphone
+ *   langsung muncul dan grafik spektrum suara bergerak real-time (sama persis seperti saat dibuka lewat
+ *   Show Package Contents -> Contents/MacOS), sekaligus menutup jendela Terminal secara otomatis!
  */
 export const MACOS_NATIVE_LAUNCHER_SH = `#!/bin/bash
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$PATH"
-
-echo "🎙️ Membuka Aplikasi OPUNG v10 (Menu Bar + Peredam Bising AI)..."
 
 MACOS_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 BUNDLE_DIR="$(cd "$MACOS_DIR/../.." && pwd -P)"
@@ -1292,6 +1381,46 @@ APP_DIR="$(cd "$MACOS_DIR/../Resources/app" && pwd -P)"
 HTML_FILE="$APP_DIR/index.html"
 
 export OPUNG_HTML_FILE="$HTML_FILE"
+
+# 0A. LANGSUNG TIMPA /Applications/OPUNG.app LAMA JIKA DIBUKA DARI DISK IMAGE (.DMG)
+if [[ "$BUNDLE_DIR" == /Volumes/* ]] && [ -w "/Applications" ]; then
+  rm -rf "/Applications/OPUNG.app" 2>/dev/null || true
+  cp -R "$BUNDLE_DIR" "/Applications/OPUNG.app" 2>/dev/null || true
+  chmod +x "/Applications/OPUNG.app/Contents/MacOS/RNNoiseStudio" 2>/dev/null || true
+  chmod +x "/Applications/OPUNG.app/Contents/MacOS/OPUNG" 2>/dev/null || true
+  /usr/bin/xattr -cr "/Applications/OPUNG.app" 2>/dev/null || true
+  /usr/bin/touch "/Applications/OPUNG.app" 2>/dev/null || true
+  (
+    /usr/bin/codesign --force --deep --sign - "/Applications/OPUNG.app" 2>/dev/null || true
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/OPUNG.app" 2>/dev/null || true
+  ) </dev/null >/dev/null 2>&1 &
+  if [ -f "/Applications/OPUNG.app/Contents/Resources/app/index.html" ]; then
+    BUNDLE_DIR="/Applications/OPUNG.app"
+    MACOS_DIR="/Applications/OPUNG.app/Contents/MacOS"
+    APP_DIR="/Applications/OPUNG.app/Contents/Resources/app"
+    HTML_FILE="$APP_DIR/index.html"
+    export OPUNG_HTML_FILE="$HTML_FILE"
+  fi
+fi
+
+# Segarkan cache ikon OPUNG.app di Finder / LaunchServices
+/usr/bin/touch "$BUNDLE_DIR" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$BUNDLE_DIR" 2>/dev/null || true
+
+# 0B. JEMBATAN OTOMATIS IZIN MIKROFON TCC macOS SAAT OPUNG.app DIKLIK LANGSUNG DI FINDER / APPLICATIONS
+if [ "$TERM_PROGRAM" != "Apple_Terminal" ] && [ "$OPUNG_TCC_BRIDGE" != "1" ]; then
+  BRIDGE_CMD="/tmp/opung_tcc_bridge_$(id -u).command"
+  cat << EOF_BRIDGE > "$BRIDGE_CMD"
+#!/bin/bash
+export OPUNG_TCC_BRIDGE=1
+exec "$MACOS_DIR/OPUNG"
+EOF_BRIDGE
+  chmod +x "$BRIDGE_CMD" 2>/dev/null || true
+  /usr/bin/xattr -cr "$BRIDGE_CMD" 2>/dev/null || true
+  if open -g -a Terminal "$BRIDGE_CMD" 2>/dev/null || open -a Terminal "$BRIDGE_CMD" 2>/dev/null; then
+    exit 0
+  fi
+fi
 
 # Cari compiler clang asli & SDK macOS (Tanpa memicu popup instalasi Xcode Command Line Tools)
 CLANG_REAL=""
@@ -1310,28 +1439,7 @@ elif [ -d "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/
   SDK_ARGS=("-isysroot" "$SDKROOT")
 fi
 
-# 0A. LANGSUNG TIMPA /Applications/OPUNG.app LAMA JIKA DIBUKA DARI DISK IMAGE (.DMG)
-if [[ "$BUNDLE_DIR" == /Volumes/* ]] && [ -w "/Applications" ]; then
-  rm -rf "/Applications/OPUNG.app" 2>/dev/null || true
-  cp -R "$BUNDLE_DIR" "/Applications/OPUNG.app" 2>/dev/null || true
-  chmod +x "/Applications/OPUNG.app/Contents/MacOS/RNNoiseStudio" 2>/dev/null || true
-  chmod +x "/Applications/OPUNG.app/Contents/MacOS/OPUNG" 2>/dev/null || true
-  /usr/bin/xattr -cr "/Applications/OPUNG.app" 2>/dev/null || true
-  (
-    /usr/bin/codesign --force --deep --sign - "/Applications/OPUNG.app" 2>/dev/null || true
-    hdiutil detach "/Volumes/OPUNG Installer" -force 2>/dev/null || true
-    hdiutil detach "/Volumes/OPUNG Installer 1" -force 2>/dev/null || true
-  ) </dev/null >/dev/null 2>&1 &
-  if [ -f "/Applications/OPUNG.app/Contents/Resources/app/index.html" ]; then
-    BUNDLE_DIR="/Applications/OPUNG.app"
-    MACOS_DIR="/Applications/OPUNG.app/Contents/MacOS"
-    APP_DIR="/Applications/OPUNG.app/Contents/Resources/app"
-    HTML_FILE="$APP_DIR/index.html"
-    export OPUNG_HTML_FILE="$HTML_FILE"
-  fi
-fi
-
-# 0B. OTOMATIS PASANG DRIVER VIRTUAL "OPUNG Microphone" (OPUNG.driver) DI LATAR BELAKANG JIKA BELUM ADA
+# 0C. OTOMATIS PASANG DRIVER VIRTUAL "OPUNG Microphone" (OPUNG.driver) DI LATAR BELAKANG JIKA BELUM ADA
 if [ ! -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
   (
     HAL_TMP="/tmp/opung-auto-hal-$$"
@@ -1356,9 +1464,9 @@ if [ ! -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleShortVersionString</key>
-  <string>10.0.0</string>
+  <string>12.0.0</string>
   <key>CFBundleVersion</key>
-  <string>10000</string>
+  <string>12000</string>
   <key>CFPlugInFactories</key>
   <dict>
     <key>e395c745-4eea-4d94-bb92-46224221047c</key>
@@ -1415,18 +1523,51 @@ EOF_INST_HAL
   ) </dev/null >/dev/null 2>&1 &
 fi
 
+# Fungsi peluncuran terlepas (double-fork POSIX::setsid) yang mewarisi izin mikrofon TCC Terminal.app
+# sekaligus menutup jendela Terminal secara otomatis tanpa mematikan aplikasi OPUNG!
+launch_native_detached() {
+  local BIN_PATH="$1"
+  local HTML_ARG="$2"
+
+  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 2>/dev/null || true
+
+  if [ -x "/usr/bin/perl" ]; then
+    /usr/bin/perl -MPOSIX -e '
+      my ($bin, $html) = @ARGV;
+      my $pid = fork();
+      exit 0 if $pid;
+      POSIX::setsid();
+      my $pid2 = fork();
+      exit 0 if $pid2;
+      open STDIN, "</dev/null";
+      open STDOUT, ">/dev/null";
+      open STDERR, ">/dev/null";
+      exec($bin, $html);
+    ' "$BIN_PATH" "$HTML_ARG"
+  else
+    nohup "$BIN_PATH" "$HTML_ARG" </dev/null >/dev/null 2>&1 &
+  fi
+
+  (
+    sleep 0.35
+    /usr/bin/osascript -e 'tell application "Terminal" to close (every window whose name contains "opung_tcc_bridge" or name contains "OPUNG" or name contains "RNNoiseStudio")' 2>/dev/null || true
+  ) </dev/null >/dev/null 2>&1 &
+
+  exit 0
+}
+
 SHADOW_BUNDLE="/tmp/OPUNG-Runtime-$(id -u)/OPUNG.app"
 SHADOW_MACOS_DIR="$SHADOW_BUNDLE/Contents/MacOS"
 SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
-SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV10"
-LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV10"
+SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV12"
+LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV12"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V12 sudah ada di bundle lokal atau di /tmp shadow bundle
 if [ -x "$LOCAL_BIN" ]; then
-  "$LOCAL_BIN" "$HTML_FILE" && exit 0
+  launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi
 if [ -x "$SHADOW_BIN" ] && [ -f "$SHADOW_APP_DIR/index.html" ]; then
-  "$SHADOW_BIN" "$SHADOW_APP_DIR/index.html" && exit 0
+  launch_native_detached "$SHADOW_BIN" "$SHADOW_APP_DIR/index.html"
 fi
 
 # 2. Tentukan target kompilasi yang 100% WRITABLE (bebas dari Read-Only DMG / AppTranslocation)
@@ -1437,6 +1578,7 @@ if [ -w "$MACOS_DIR" ]; then
 else
   mkdir -p "$SHADOW_MACOS_DIR" "$SHADOW_APP_DIR" 2>/dev/null || true
   cp -f "$BUNDLE_DIR/Contents/Info.plist" "$SHADOW_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  cp -f "$BUNDLE_DIR/Contents/Resources/AppIcon.icns" "$SHADOW_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
   cp -f "$HTML_FILE" "$SHADOW_APP_DIR/index.html" 2>/dev/null || true
   TARGET_BIN="$SHADOW_BIN"
   TARGET_HTML="$SHADOW_APP_DIR/index.html"
@@ -1444,6 +1586,24 @@ fi
 
 if [ -n "$CLANG_REAL" ]; then
   TMP_BIN="\${TARGET_BIN}.tmp.$$"
+  ENT_PLIST="/tmp/opung_entitlements_$$.plist"
+  cat << 'EOF_ENT' > "$ENT_PLIST"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <key>com.apple.security.device.microphone</key>
+  <true/>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
+EOF_ENT
+
   "$CLANG_REAL" -O0 -fobjc-arc "\${SDK_ARGS[@]}" \\
     -framework Cocoa -framework WebKit -framework AVFoundation \\
     "$APP_DIR/native_host.m" -o "$TMP_BIN" 2>/dev/null || true
@@ -1451,13 +1611,15 @@ if [ -n "$CLANG_REAL" ]; then
   if [ -f "$TMP_BIN" ]; then
     chmod +x "$TMP_BIN" 2>/dev/null || true
     /usr/bin/xattr -cr "$TMP_BIN" 2>/dev/null || true
-    /usr/bin/codesign --force --sign - "$TMP_BIN" 2>/dev/null || true
+    /usr/bin/codesign --force --entitlements "$ENT_PLIST" --sign - "$TMP_BIN" 2>/dev/null || /usr/bin/codesign --force --sign - "$TMP_BIN" 2>/dev/null || true
     mv -f "$TMP_BIN" "$TARGET_BIN" 2>/dev/null || true
+    rm -f "$ENT_PLIST" 2>/dev/null || true
 
     if [ -x "$TARGET_BIN" ]; then
-      "$TARGET_BIN" "$TARGET_HTML" && exit 0
+      launch_native_detached "$TARGET_BIN" "$TARGET_HTML"
     fi
   fi
+  rm -f "$ENT_PLIST" 2>/dev/null || true
 fi
 
 # 3. Fallback Jendela Aplikasi Standalone jika Mac tidak memiliki compiler Xcode
@@ -1878,14 +2040,18 @@ function createUnixZipArchive(entries: ZipEntryInput[]): ArrayBuffer {
   return outputBuffer;
 }
 
-const MACOS_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+export const MACOS_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
   <string>OPUNG</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon.icns</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>com.opung.desktop.v10</string>
+  <string>com.opung.desktop.v12</string>
   <key>CFBundleName</key>
   <string>OPUNG</string>
   <key>CFBundleDisplayName</key>
@@ -1893,9 +2059,9 @@ const MACOS_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>10.0.0</string>
+  <string>12.0.0</string>
   <key>CFBundleVersion</key>
-  <string>10000</string>
+  <string>12000</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
@@ -1905,18 +2071,235 @@ const MACOS_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>`;
 
+let cachedOpungIcnsBytes: Uint8Array | null = null;
+
+/**
+ * Menghasilkan file ikon resmi macOS Apple Icon Image (`AppIcon.icns`) murni di memori:
+ * - Desain Ikon Option 1 (Kubah Akustik Putih "O" + 5 Bar Equalizer Vokal Electric Cyan di atas Squircle Midnight Sapphire)
+ * - Berisi chunk 'ic08' (256x256 Retina PNG) dan 'ic07' (128x128 PNG) sesuai spesifikasi Apple ICNS.
+ */
+export function buildOpungAppIconIcns(): Uint8Array {
+  if (cachedOpungIcnsBytes) {
+    return cachedOpungIcnsBytes;
+  }
+
+  function clampVal(v: number, min: number, max: number): number {
+    return v < min ? min : v > max ? max : v;
+  }
+  function smoothstepVal(edge0: number, edge1: number, x: number): number {
+    const t = clampVal((x - edge0) / (edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+  function sdRoundedBox(px: number, py: number, bx: number, by: number, r: number): number {
+    const qx = Math.abs(px) - bx + r;
+    const qy = Math.abs(py) - by + r;
+    const outDist = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
+    const inDist = Math.min(Math.max(qx, qy), 0);
+    return outDist + inDist - r;
+  }
+  function sdVerticalCapsule(px: number, py: number, cx: number, halfH: number, rad: number): number {
+    const dx = px - cx;
+    const clampedY = clampVal(py, -halfH, halfH);
+    const dy = py - clampedY;
+    return Math.hypot(dx, dy) - rad;
+  }
+
+  const bars = [
+    { cx: -0.205, halfH: 0.055 },
+    { cx: -0.1025, halfH: 0.118 },
+    { cx: 0.0, halfH: 0.185 },
+    { cx: 0.1025, halfH: 0.118 },
+    { cx: 0.205, halfH: 0.055 },
+  ];
+
+  function renderIconPng(width: number, height: number): Uint8Array {
+    const rawData = new Uint8Array(height * (1 + width * 4));
+    const aa = 2.2 / width;
+
+    for (let y = 0; y < height; y++) {
+      const rowStart = y * (1 + width * 4);
+      rawData[rowStart] = 0; // PNG Filter 0
+      const ny = ((y + 0.5) / height) * 2 - 1;
+
+      for (let x = 0; x < width; x++) {
+        const nx = ((x + 0.5) / width) * 2 - 1;
+        const idx = rowStart + 1 + x * 4;
+
+        const dBox = sdRoundedBox(nx, ny, 0.86, 0.86, 0.39);
+        if (dBox > aa * 2) {
+          continue;
+        }
+        const bgAlpha = 1 - smoothstepVal(-aa, aa, dBox);
+
+        const diag = clampVal((nx * 0.4 + ny * 0.7 + 1) * 0.5, 0, 1);
+        const distCenter = Math.hypot(nx, ny);
+        const centerGlow = Math.exp(-distCenter * distCenter * 4.2);
+
+        let r = 15 * (1 - diag) + 6 * diag + centerGlow * 12;
+        let g = 27 * (1 - diag) + 11 * diag + centerGlow * 38;
+        let b = 52 * (1 - diag) + 23 * diag + centerGlow * 68;
+
+        const rimDist = Math.abs(dBox + 0.015);
+        const rimFactor =
+          (1 - smoothstepVal(0, 0.025, rimDist)) * clampVal(1 - (nx + ny) * 0.4, 0.15, 1);
+        r = r * (1 - rimFactor * 0.35) + 56 * rimFactor * 0.35;
+        g = g * (1 - rimFactor * 0.35) + 189 * rimFactor * 0.35;
+        b = b * (1 - rimFactor * 0.35) + 248 * rimFactor * 0.35;
+
+        const dRing = Math.abs(distCenter - 0.555) - 0.132;
+
+        let dBars = 999;
+        for (let bi = 0; bi < bars.length; bi++) {
+          const db = sdVerticalCapsule(nx, ny, bars[bi].cx, bars[bi].halfH, 0.027);
+          if (db < dBars) dBars = db;
+        }
+
+        if (dBars > 0 && dBars < 0.14) {
+          const glow = Math.exp(-dBars * 24) * 0.42;
+          r += 14 * glow;
+          g += 165 * glow;
+          b += 233 * glow;
+        }
+
+        const ringMask = 1 - smoothstepVal(-aa, aa, dRing);
+        if (ringMask > 0) {
+          const vt = clampVal((ny + 0.68) / 1.36, 0, 1);
+          const ringR = 255 * (1 - vt) + 218 * vt;
+          const ringG = 255 * (1 - vt) + 240 * vt;
+          const ringB = 255;
+          r = r * (1 - ringMask) + ringR * ringMask;
+          g = g * (1 - ringMask) + ringG * ringMask;
+          b = b * (1 - ringMask) + ringB * ringMask;
+        }
+
+        const barMask = 1 - smoothstepVal(-aa, aa, dBars);
+        if (barMask > 0) {
+          const bt = clampVal((ny + 0.22) / 0.44, 0, 1);
+          const barR = 115 * (1 - bt) + 14 * bt;
+          const barG = 240 * (1 - bt) + 165 * bt;
+          const barB = 255 * (1 - bt) + 245 * bt;
+          r = r * (1 - barMask) + barR * barMask;
+          g = g * (1 - barMask) + barG * barMask;
+          b = b * (1 - barMask) + barB * barMask;
+        }
+
+        rawData[idx] = Math.round(clampVal(r, 0, 255));
+        rawData[idx + 1] = Math.round(clampVal(g, 0, 255));
+        rawData[idx + 2] = Math.round(clampVal(b, 0, 255));
+        rawData[idx + 3] = Math.round(clampVal(bgAlpha * 255, 0, 255));
+      }
+    }
+
+    // Bungkus rawData ke dalam stream Zlib Uncompressed (RFC 1950 / RFC 1951)
+    const maxBlock = 65535;
+    const numBlocks = Math.ceil(rawData.length / maxBlock) || 1;
+    const idatData = new Uint8Array(2 + numBlocks * 5 + rawData.length + 4);
+    idatData[0] = 0x78;
+    idatData[1] = 0x01;
+    let pos = 2;
+    let offset = 0;
+    for (let blk = 0; blk < numBlocks; blk++) {
+      const isLast = blk === numBlocks - 1;
+      const len = Math.min(maxBlock, rawData.length - offset);
+      const nlen = ~len & 0xffff;
+      idatData[pos++] = isLast ? 1 : 0;
+      idatData[pos++] = len & 0xff;
+      idatData[pos++] = (len >> 8) & 0xff;
+      idatData[pos++] = nlen & 0xff;
+      idatData[pos++] = (nlen >> 8) & 0xff;
+      idatData.set(rawData.subarray(offset, offset + len), pos);
+      pos += len;
+      offset += len;
+    }
+    let s1 = 1;
+    let s2 = 0;
+    for (let i = 0; i < rawData.length; i++) {
+      s1 = (s1 + rawData[i]) % 65521;
+      s2 = (s2 + s1) % 65521;
+    }
+    const adler = ((s2 << 16) | s1) >>> 0;
+    idatData[pos++] = (adler >>> 24) & 0xff;
+    idatData[pos++] = (adler >>> 16) & 0xff;
+    idatData[pos++] = (adler >>> 8) & 0xff;
+    idatData[pos++] = adler & 0xff;
+
+    function encodePngChunk(typeStr: string, chunkData: Uint8Array): Uint8Array {
+      const chunk = new Uint8Array(12 + chunkData.length);
+      const dv = new DataView(chunk.buffer);
+      dv.setUint32(0, chunkData.length, false);
+      for (let i = 0; i < 4; i++) {
+        chunk[4 + i] = typeStr.charCodeAt(i);
+      }
+      chunk.set(chunkData, 8);
+      const crc = computeCrc32(chunk.subarray(4, 8 + chunkData.length));
+      dv.setUint32(8 + chunkData.length, crc, false);
+      return chunk;
+    }
+
+    const ihdr = new Uint8Array(13);
+    const ihdrDv = new DataView(ihdr.buffer);
+    ihdrDv.setUint32(0, width, false);
+    ihdrDv.setUint32(4, height, false);
+    ihdr[8] = 8; // 8-bit depth
+    ihdr[9] = 6; // RGBA color type
+
+    const pngSig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const ihdrChunk = encodePngChunk('IHDR', ihdr);
+    const idatChunk = encodePngChunk('IDAT', idatData);
+    const iendChunk = encodePngChunk('IEND', new Uint8Array(0));
+
+    const pngOut = new Uint8Array(
+      pngSig.length + ihdrChunk.length + idatChunk.length + iendChunk.length
+    );
+    let p = 0;
+    pngOut.set(pngSig, p);
+    p += pngSig.length;
+    pngOut.set(ihdrChunk, p);
+    p += ihdrChunk.length;
+    pngOut.set(idatChunk, p);
+    p += idatChunk.length;
+    pngOut.set(iendChunk, p);
+    return pngOut;
+  }
+
+  const png128 = renderIconPng(128, 128);
+  const totalIcnsLen = 8 + (8 + png128.length);
+  const icns = new Uint8Array(totalIcnsLen);
+  const icnsDv = new DataView(icns.buffer);
+  // Header 'icns'
+  icns[0] = 0x69; // 'i'
+  icns[1] = 0x63; // 'c'
+  icns[2] = 0x6e; // 'n'
+  icns[3] = 0x73; // 's'
+  icnsDv.setUint32(4, totalIcnsLen, false);
+
+  // Chunk 'ic07' (128x128 PNG)
+  icns[8] = 0x69; // 'i'
+  icns[9] = 0x63; // 'c'
+  icns[10] = 0x30; // '0'
+  icns[11] = 0x37; // '7'
+  icnsDv.setUint32(12, 8 + png128.length, false);
+  icns.set(png128, 16);
+
+  cachedOpungIcnsBytes = icns;
+  return icns;
+}
+
 /**
  * Membangun Disk Image macOS Asli (.DMG — Apple HFS Plus version 4 / TN1150) murni di browser:
  * - Memiliki HFSPlusVolumeHeader resmi ('H+' 0x482B di offset 1024 & Backup Volume Header di akhir disk)
  * - Mengatur finderInfo[2] = 2 (kHFSRootFolderID) sehingga saat file OPUNG-Installer.dmg diklik di
- *   Downloads / Finder macOS, jendela Finder "OPUNG v10" OTOMATIS langsung terbuka di layar!
- * - Hanya berisi 1 aplikasi tunggal: OPUNG.app (tanpa file .command tambahan yang membingungkan).
+ *   Downloads / Finder macOS, jendela Finder "OPUNG Installer" OTOMATIS langsung terbuka di layar!
+ * - Menampilkan 2 item berdampingan persis seperti installer macOS standar (contoh: Termul Manager):
+ *   1. OPUNG.app (di sebelah kiri, lengkap dengan ikon kustom AppIcon.icns Option 1)
+ *   2. Applications (di sebelah kanan, shortcut/symlink resmi ke /Applications untuk Drag & Drop!)
  */
 export function buildMacOSDiskImageDmg(): ArrayBuffer {
   const encoder = new TextEncoder();
   const BLOCK_SIZE = 4096;
   const TOTAL_BLOCKS = 256; // 256 * 4096 = 1,048,576 bytes (1.0 MB HFS+ Volume)
   const HFS_TIMESTAMP = 3845659200; // Seconds since 1904-01-01 00:00:00 UTC
+  const appIconIcnsBytes = buildOpungAppIconIcns();
 
   interface HfsFolderItem {
     kind: 'folder';
@@ -1935,6 +2318,9 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     name: string;
     mode: number;
     data: Uint8Array;
+    isSymlink?: boolean;
+    locationX?: number;
+    locationY?: number;
     startBlock?: number;
     blockCount?: number;
   }
@@ -1944,8 +2330,8 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
       kind: 'folder',
       cnid: 2,
       parentCnid: 1,
-      name: 'OPUNG v10',
-      valence: 1,
+      name: 'OPUNG Installer',
+      valence: 2,
       isRoot: true,
     },
     {
@@ -1975,7 +2361,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
       cnid: 19,
       parentCnid: 17,
       name: 'Resources',
-      valence: 1,
+      valence: 2,
     },
     {
       kind: 'folder',
@@ -1990,6 +2376,17 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     {
       kind: 'file',
       cnid: 21,
+      parentCnid: 2,
+      name: 'Applications',
+      mode: 0o120755,
+      isSymlink: true,
+      locationX: 355,
+      locationY: 140,
+      data: encoder.encode('/Applications'),
+    },
+    {
+      kind: 'file',
+      cnid: 22,
       parentCnid: 17,
       name: 'Info.plist',
       mode: 0o100644,
@@ -1997,7 +2394,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 22,
+      cnid: 23,
       parentCnid: 18,
       name: 'OPUNG',
       mode: 0o100755,
@@ -2005,7 +2402,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 23,
+      cnid: 24,
       parentCnid: 18,
       name: 'RNNoiseStudio',
       mode: 0o100755,
@@ -2013,7 +2410,15 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 24,
+      cnid: 25,
+      parentCnid: 19,
+      name: 'AppIcon.icns',
+      mode: 0o100644,
+      data: appIconIcnsBytes,
+    },
+    {
+      kind: 'file',
+      cnid: 26,
       parentCnid: 20,
       name: 'index.html',
       mode: 0o100644,
@@ -2021,7 +2426,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 25,
+      cnid: 27,
       parentCnid: 20,
       name: 'native_host.jxa.js',
       mode: 0o100644,
@@ -2029,7 +2434,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 26,
+      cnid: 28,
       parentCnid: 20,
       name: 'native_host.m',
       mode: 0o100644,
@@ -2095,16 +2500,16 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
 
     // FolderInfo (offset 48..63)
     if (folder.isRoot) {
-      // Atur ukuran & posisi jendela Finder saat volume dibuka (top=140, left=220, bottom=520, right=760)
-      dv.setInt16(48, 140, false);
-      dv.setInt16(50, 220, false);
-      dv.setInt16(52, 520, false);
-      dv.setInt16(54, 760, false);
+      // Atur ukuran & posisi jendela Finder saat volume dibuka (top=160, left=260, bottom=480, right=770 -> 510x320)
+      dv.setInt16(48, 160, false);
+      dv.setInt16(50, 260, false);
+      dv.setInt16(52, 480, false);
+      dv.setInt16(54, 770, false);
     } else if (folder.isBundle) {
-      // kHasBundle = 0x2000 agar Finder macOS mengenali OPUNG.app sebagai Application Bundle!
+      // kHasBundle = 0x2000 agar Finder macOS mengenali OPUNG.app sebagai Application Bundle dengan ikon AppIcon.icns!
       dv.setUint16(56, 0x2000, false);
-      dv.setInt16(58, 120, false); // icon location Y
-      dv.setInt16(60, 140, false); // icon location X
+      dv.setInt16(58, 140, false); // icon location Y (sejajar dengan Applications di kanan)
+      dv.setInt16(60, 145, false); // icon location X (di sisi kiri jendela Finder)
     }
     return buf;
   }
@@ -2125,6 +2530,16 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     dv.setUint32(32, 99, false);
     dv.setUint32(36, 99, false);
     dv.setUint16(42, file.mode, false);
+
+    // FileInfo / FinderInfo (offset 48..63)
+    if (file.isSymlink) {
+      // Symlink HFS+ resmi sesuai Apple TN1150: fileType = 'slnk' (0x736C6E6B), fileCreator = 'rhap' (0x72686170)
+      dv.setUint32(48, 0x736c6e6b, false); // 'slnk'
+      dv.setUint32(52, 0x72686170, false); // 'rhap'
+      dv.setUint16(56, 0x0000, false);
+      dv.setInt16(58, file.locationY ?? 140, false); // icon location Y
+      dv.setInt16(60, file.locationX ?? 355, false); // icon location X (di sisi kanan jendela Finder)
+    }
 
     // Data Fork HFSPlusForkData (offset 88..167)
     dv.setUint32(88, 0, false); // logicalSize high
@@ -2336,7 +2751,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
   vhd.setUint32(20, HFS_TIMESTAMP, false); // modifyDate
   vhd.setUint32(24, 0, false); // backupDate
   vhd.setUint32(28, HFS_TIMESTAMP, false); // checkedDate
-  vhd.setUint32(32, files.length, false); // fileCount
+  vhd.setUint32(32, files.length, false); // fileCount = 8
   vhd.setUint32(36, folders.length - 1, false); // folderCount (excluding root folder per TN1150)
   vhd.setUint32(40, BLOCK_SIZE, false); // blockSize = 4096
   vhd.setUint32(44, TOTAL_BLOCKS, false); // totalBlocks = 256
@@ -2355,7 +2770,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
   const uniqueSeed = (Date.now() & 0xffffffff) >>> 0;
   vhd.setUint32(88, 2, false);
   vhd.setUint32(104, 0x4f505631, false); // Volume UUID high ('OPV1')
-  vhd.setUint32(108, uniqueSeed ^ 0x30444d47, false); // Unique Volume UUID low
+  vhd.setUint32(108, uniqueSeed ^ 0x32444d47, false); // Unique Volume UUID low
 
   // allocationFile ForkData (offset 112..191): Block 1 (1 block = 4096B)
   vhd.setUint32(112 + 4, BLOCK_SIZE, false); // logicalSize low
@@ -2478,9 +2893,9 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
   kdv.setUint32(56, 1, false); // segmentNumber = 1
   kdv.setUint32(60, 1, false); // segmentCount = 1
   kdv.setUint32(64, 0x4f505631, false); // segmentID[0]
-  kdv.setUint32(68, 0x305f444d, false); // segmentID[1]
+  kdv.setUint32(68, 0x325f444d, false); // segmentID[1]
   kdv.setUint32(72, uniqueSeed, false); // segmentID[2]
-  kdv.setUint32(76, 0x56313030, false); // segmentID[3]
+  kdv.setUint32(76, 0x56313230, false); // segmentID[3]
   kdv.setUint32(80, 0, false); // dataForkChecksum.type = None (0)
   kdv.setUint32(84, 0, false); // dataForkChecksum.size = 0
   kdv.setUint32(216, 0, false); // xmlOffset high
@@ -2508,6 +2923,7 @@ export function buildMacOSAppBundleZip(): ArrayBuffer {
   const encoder = new TextEncoder();
   const empty = new Uint8Array(0);
   const oneClickInstallerScript = generateMacOSOneClickInstallerScript();
+  const appIconIcnsBytes = buildOpungAppIconIcns();
 
   return createUnixZipArchive([
     { path: 'OPUNG.app/', data: empty, unixMode: 0o040755 },
@@ -2518,6 +2934,11 @@ export function buildMacOSAppBundleZip(): ArrayBuffer {
     {
       path: 'OPUNG.app/Contents/Info.plist',
       data: encoder.encode(MACOS_INFO_PLIST),
+      unixMode: 0o100644,
+    },
+    {
+      path: 'OPUNG.app/Contents/Resources/AppIcon.icns',
+      data: appIconIcnsBytes,
       unixMode: 0o100644,
     },
     {
@@ -2534,6 +2955,11 @@ export function buildMacOSAppBundleZip(): ArrayBuffer {
       path: 'OPUNG.app/Contents/Resources/app/native_host.jxa.js',
       data: encoder.encode(MACOS_NATIVE_JXA_SCRIPT),
       unixMode: 0o100644,
+    },
+    {
+      path: 'OPUNG.app/Contents/MacOS/OPUNG',
+      data: encoder.encode(MACOS_NATIVE_LAUNCHER_SH),
+      unixMode: 0o100755,
     },
     {
       path: 'OPUNG.app/Contents/MacOS/RNNoiseStudio',

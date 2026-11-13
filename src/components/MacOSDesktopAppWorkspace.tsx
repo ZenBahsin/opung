@@ -1151,8 +1151,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           <div className="w-full max-w-[390px] mb-2 px-3.5 py-1.5 rounded-lg bg-[#161D2E]/90 border border-slate-700/70 flex items-center justify-between text-[11px] text-slate-300 select-none">
             <span className="text-slate-400 font-medium">macOS Menu Bar</span>
             <div className="flex items-center gap-3">
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-400/20 border border-sky-400/50 text-sky-300 font-bold">
-                <Mic className="w-3 h-3 text-sky-400" />
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-sky-400/20 border border-sky-400/50 text-sky-300 font-bold">
+                <img
+                  src="/opung-icon.png"
+                  alt=""
+                  className="w-3.5 h-3.5 rounded-[3px]"
+                />
                 OPUNG
               </span>
               <span className="text-slate-400 font-mono text-[10px]">Wi-Fi · 100%</span>
@@ -1167,8 +1171,13 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                 <span className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] inline-block" />
                 <span className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] inline-block" />
               </div>
-              <div className="text-xs font-bold tracking-tight text-slate-100 font-display">
-                OPUNG — Menu Bar AI
+              <div className="inline-flex items-center gap-1.5 text-xs font-bold tracking-tight text-slate-100 font-display">
+                <img
+                  src="/opung-icon.png"
+                  alt=""
+                  className="w-4 h-4 rounded-[4px] border border-sky-400/30"
+                />
+                <span>OPUNG — Menu Bar AI</span>
               </div>
               <div className="text-[11px] font-mono text-sky-400 tabular-nums">
                 {vocalClarityEnabled && krispModeEnabled && speakerEchoGuardEnabled

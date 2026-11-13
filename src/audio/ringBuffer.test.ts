@@ -110,7 +110,9 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
     MACOS_STANDALONE_APP_HTML,
     MACOS_NATIVE_OBJC_SOURCE,
     MACOS_NATIVE_LAUNCHER_SH,
+    MACOS_INFO_PLIST,
     generateMacOSOneClickInstallerScript,
+    buildOpungAppIconIcns,
     buildMacOSDiskImageDmg,
   } = await import('../utils/macosAppBuilder');
 
@@ -120,30 +122,49 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
   execFileSync('/bin/bash', ['-n', '/tmp/opung_test_launcher.sh']);
   execFileSync('/bin/bash', ['-n', '/tmp/opung_test_installer.sh']);
 
-  // Pastikan kode Objective-C menyertakan NSStatusBar (Menu Bar kanan atas macOS) dan tetap aktif saat ditutup
+  // Pastikan kode Objective-C menyertakan NSStatusBar (Menu Bar kanan atas macOS), AppIcon.icns untuk Dock, loadOpungInterface setelah izin AVFoundation, dan tetap aktif saat ditutup
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('NSStatusBar systemStatusBar'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('toggleMenuBarWindow:'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('windowShouldClose:'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('loadOpungInterface'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('authorizationStatusForMediaType:AVMediaTypeAudio'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('AppIcon.icns'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('setApplicationIconImage:'));
+
+  // Pastikan Info.plist mereferensikan AppIcon.icns
+  assert.ok(MACOS_INFO_PLIST.includes('<key>CFBundleIconFile</key>'));
+  assert.ok(MACOS_INFO_PLIST.includes('<string>AppIcon.icns</string>'));
+
+  // Pastikan buildOpungAppIconIcns() menghasilkan file Apple Icon Image (.icns) valid dengan header 'icns' dan tipe 'ic07' (128x128 PNG)
+  const icnsBytes = buildOpungAppIconIcns();
+  const icnsMagic = new TextDecoder().decode(icnsBytes.subarray(0, 4));
+  const icnsType = new TextDecoder().decode(icnsBytes.subarray(8, 12));
+  assert.equal(icnsMagic, 'icns');
+  assert.equal(icnsType, 'ic07');
+  assert.ok(icnsBytes.byteLength > 1024);
 
   // Pastikan OPUNG.app mengenali "OPUNG Microphone" (l.includes('opung')) sebagai Virtual Mic utama & mencegah loopback
   assert.ok(MACOS_STANDALONE_APP_HTML.includes("l.includes('opung')"));
   assert.ok(MACOS_STANDALONE_APP_HTML.includes('isOpungOrBlackHoleInputLabel'));
 
-  // Pastikan launcher internal OPUNG.app otomatis menyalin ke /Applications/OPUNG.app dan memasang OPUNG.driver ("OPUNG Microphone") tanpa perlu Terminal
+  // Pastikan launcher internal OPUNG.app otomatis menyalin ke /Applications/OPUNG.app, menjembatani izin mikrofon TCC macOS (OPUNG_TCC_BRIDGE + POSIX::setsid), dan memasang OPUNG.driver
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('/Applications/OPUNG.app'));
+  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('OPUNG_TCC_BRIDGE'));
+  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('POSIX::setsid()'));
+  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('com.apple.security.device.audio-input'));
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('/Library/Audio/Plug-Ins/HAL/OPUNG.driver'));
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('OPUNG Microphone'));
 
-  // Pastikan buildMacOSDiskImageDmg() menghasilkan disk image Apple HFS+ + UDIF (.dmg) yang valid
+  // Pastikan buildMacOSDiskImageDmg() menghasilkan disk image Apple HFS+ + UDIF (.dmg) yang valid dengan OPUNG.app + symlink Applications (2 items)
   const dmgBuffer = buildMacOSDiskImageDmg();
   assert.ok(dmgBuffer.byteLength >= 1048576 + 512);
   const dmgBytes = new Uint8Array(dmgBuffer);
   const dmgDv = new DataView(dmgBuffer);
 
-  // Periksa HFSPlusVolumeHeader pada offset 1024: signature 'H+' (0x482B), version 4, fileCount = 6, dan finderInfo[2] = 2 (auto-open window)
+  // Periksa HFSPlusVolumeHeader pada offset 1024: signature 'H+' (0x482B), version 4, fileCount = 8 (termasuk symlink Applications & AppIcon.icns), dan finderInfo[2] = 2 (auto-open window)
   assert.equal(dmgDv.getUint16(1024, false), 0x482b);
   assert.equal(dmgDv.getUint16(1026, false), 4);
-  assert.equal(dmgDv.getUint32(1024 + 32, false), 6);
+  assert.equal(dmgDv.getUint32(1024 + 32, false), 8);
   assert.equal(dmgDv.getUint32(1024 + 88, false), 2);
 
   // Periksa trailer UDIF 'koly' pada 512 byte terakhir
@@ -154,6 +175,7 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
 
   const dmgText = new TextDecoder().decode(dmgBytes);
   assert.ok(dmgText.includes('RNNoiseStudio'));
+  assert.ok(dmgText.includes('/Applications'));
   assert.ok(dmgText.includes('whole disk (Apple_HFS : 0)'));
   assert.ok(!dmgText.includes('Klik 2x Pasang OPUNG.command'));
 });
