@@ -1,0 +1,6 @@
+{
+  "name": "RNNoise AudioWorklet Studio & Ring Buffer Workbench",
+  "description": "Production-grade Web Audio API & AudioWorklet real-time noise cancellation architecture using @jitsi/rnnoise-wasm with a zero-allocation 128-to-480 sample Circular Ring Buffer.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
