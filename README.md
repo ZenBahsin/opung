@@ -3,11 +3,11 @@
 
   # Opung — Office Proximity Ultra Noise Gate
 
-  **Peredam Bising Radius &le; 1.0 Meter & Penjernih Vokal Studio HD 48 kHz untuk macOS, Google Meet & Zoom**
+  **Peredam Bising Radius &le; 1.0 Meter &amp; Penjernih Vokal Studio HD 48 kHz untuk macOS, Windows, Google Meet &amp; Zoom**
 
-  [![Platform](https://img.shields.io/badge/macOS-11.0%2B%20(Apple%20Silicon%20%26%20Intel)-0284c7?style=flat-square&logo=apple&logoColor=white)](#arsitektur-native-macos)
-  [![Audio Engine](https://img.shields.io/badge/DSP%20Engine-48%20kHz%20Studio%20HD-10b981?style=flat-square)](#4-mesin-audio-pintar-otomatis)
-  [![Virtual Mic](https://img.shields.io/badge/Virtual%20Mic-BlackHole%202ch%20(CoreAudio%20HAL)-38bdf8?style=flat-square)](#integrasi-google-meet--zoom)
+  [![macOS](https://img.shields.io/badge/macOS-11.0%2B%20(.dmg)-0284c7?style=flat-square&logo=apple&logoColor=white)](#panduan-instalasi--penggunaan)
+  [![Windows](https://img.shields.io/badge/Windows-10%2F11%20x64%20(.exe)-10b981?style=flat-square&logo=windows&logoColor=white)](#arsitektur-native-windows-opung-windows-x64exe)
+  [![Audio Engine](https://img.shields.io/badge/DSP%20Engine-48%20kHz%20Studio%20HD-38bdf8?style=flat-square)](#4-mesin-audio-pintar-otomatis)
   [![Version](https://img.shields.io/badge/Versi-1.0-f43f5e?style=flat-square)](#lisensi--kredit)
   [![License: MIT](https://img.shields.io/badge/License-MIT-eab308?style=flat-square)](LICENSE)
 </div>
@@ -16,7 +16,7 @@
 
 ## Ringkasan Proyek
 
-**Opung** (*Office Proximity Ultra Noise Gate*) adalah aplikasi peredam kebisingan jarak dekat (*near-field proximity noise gate*) dan penjernih vokal *real-time* yang dirancang khusus untuk rapat daring (**Google Meet**, **Zoom**, **Microsoft Teams**, **Slack**, dan **Discord**) dari ruang kantor terbuka (*open-space office*), *co-working space*, maupun ruangan yang ramai.
+**Opung** (*Office Proximity Ultra Noise Gate*) adalah aplikasi peredam kebisingan jarak dekat (*near-field proximity noise gate*) dan penjernih vokal *real-time* untuk **macOS** dan **Windows** yang dirancang khusus untuk rapat daring (**Google Meet**, **Zoom**, **Microsoft Teams**, **Slack**, dan **Discord**) dari ruang kantor terbuka (*open-space office*), *co-working space*, maupun ruangan yang ramai.
 
 Berbeda dengan peredam bising bawaan laptop yang masih sering meloloskan suara rekan kerja yang mengobrol di meja sebelah (karena sama-sama dikenali sebagai frekuensi suara manusia), **Opung** mengunci fokus tangkapan mikrofon hanya pada **radius &le; 1.0 meter** di depan pembicara utama, mengupas bising alat berat/ketikan *keyboard* saat berbicara, serta memoles vokal dengan **5-Stage Studio HD Equalizer** secara otomatis.
 
@@ -29,9 +29,9 @@ Berbeda dengan peredam bising bawaan laptop yang masih sering meloloskan suara r
 | **Gerbang Radius &le; 1.0 Meter** | *Hard Proximity Gate* dengan 3 preset jarak (`0.5m Dekat`, `1.0m Kantor`, `1.5m Ruang`) | Suara obrolan rekan kerja di meja sebelah (&ge; 1.5m) diputus mutlak ke `0.00x` (`-90 dB`) |
 | **Pengupas Bising Saat Bicara** | *Sidechain Formant Detector* (`120 Hz – 3.1 kHz`) + *ZCR Discriminator* + *Wiener Spectral Subtraction* | Suara bor bangunan, deru kipas, dan ketikan *mechanical keyboard* dikupas bersih bahkan saat Anda sedang berbicara |
 | **Penjernih Vokal Studio HD** | *5-Stage Parametric EQ* (`48 kHz`) + *Soft-Knee Studio Compressor* | Menghilangkan suara mendem/kaleng (*Anti-Mud 260 Hz*) dan mengangkat artikulasi vokal (`+4.5 dB @ 3.5 kHz`) |
-| **Anti-Bocor Speaker & Anti-Goa** | *Hardware AEC* + *Echo Guard Decay Tracker* | Mencegah suara dari speaker MacBook memantul kembali ke mikrofon saat rapat tanpa *earphone* maupun saat uji suara sendiri |
-| **Aplikasi Menu Bar macOS** | Native Objective-C (`Cocoa` + `NSStatusBar` + `WKWebView` + `CoreAudio HAL`) | Muncul sebagai ikon logo Opung di Menu Bar atas macOS (samping baterai/Wi-Fi), ukuran ringan (~50 KB), beban CPU `< 2%` |
-| **Jembatan Langsung BlackHole 2ch** | *Lock-Free Ring Buffer* `48 kHz` via `AudioUnit` / `CoreAudio HAL` | Mengalirkan suara bersih langsung ke mikrofon virtual **BlackHole 2ch** tanpa membocorkan suara sendiri ke *earphone* |
+| **Anti-Bocor Speaker & Anti-Goa** | *Hardware AEC* + *Echo Guard Decay Tracker* | Mencegah suara dari speaker MacBook atau laptop Windows memantul kembali ke mikrofon saat rapat tanpa *earphone* |
+| **Native macOS (Menu Bar)** | Objective-C (`Cocoa` + `NSStatusBar` + `WKWebView` + `CoreAudio HAL`) &rarr; `BlackHole 2ch` | Muncul di Menu Bar atas macOS, ukuran ringan, beban CPU `< 2%` |
+| **Native Windows (System Tray)** | `.NET 8 WinForms` + `Edge WebView2` + `NAudio WASAPI` &rarr; `VB-CABLE` | Berjalan di System Tray Windows 10/11 dalam satu file `Opung-Windows-x64.exe` |
 
 ---
 
@@ -68,58 +68,66 @@ Secara otomatis menjernihkan karakter suara mikrofon bawaan laptop melalui 5 tah
 
 ## Arsitektur Native macOS (`Opung.app` & `OPUNG-Installer.dmg`)
 
-Aplikasi desktop macOS Opung **tidak menggunakan Electron** yang memakan ratusan megabyte RAM, melainkan dibangun menggunakan arsitektur **Native macOS** murni:
+Aplikasi desktop macOS Opung **tidak menggunakan Electron**, melainkan dibangun menggunakan arsitektur **Native macOS** murni:
 
 - **UI & Window Host**: Native Objective-C (`Cocoa`, `AppKit`, `NSStatusBar`, `WKWebView`) dengan jendela *floating panel* yang otomatis menyesuaikan tinggi konten (*Auto-Fit Window Height Bridge*).
-- **Menu Bar Integration**: Menampilkan ikon resmi Opung di **macOS Menu Bar** kanan atas (sebelah indikator Wi-Fi/baterai) untuk membuka/menyembunyikan panel dengan cepat.
-- **CoreAudio HAL Bridge**: Menulis sampel PCM `Float32` / `Int16` hasil pemrosesan DSP secara langsung ke perangkat `BlackHole 2ch` melalui `AudioUnit` (`kAudioUnitSubType_HALOutput`) yang otomatis menyesuaikan *sample rate* perangkat keras (`48.000 Hz` atau `44.100 Hz`).
-- **In-Browser HFS+ `.DMG` Generator (`src/utils/macosAppBuilder.ts`)**: Web aplikasi mampu merakit *disk image* macOS asli (`OPUNG-Installer.dmg` berformat Apple HFS+ / UDIF `koly` lengkap dengan `.DS_Store`, ikon Retina `AppIcon.icns`, `Opung.app`, dan pintasan *drag-and-drop* ke folder `Applications`) secara langsung di *browser* tanpa memerlukan server kompilasi eksternal.
+- **Menu Bar Integration**: Menampilkan ikon resmi Opung di **macOS Menu Bar** kanan atas (sebelah indikator Wi-Fi/baterai).
+- **CoreAudio HAL Bridge**: Menulis sampel PCM hasil pemrosesan DSP secara langsung ke perangkat **`BlackHole 2ch`** melalui `AudioUnit` (`kAudioUnitSubType_HALOutput`).
+- **In-Browser HFS+ `.DMG` Generator (`src/utils/macosAppBuilder.ts`)**: Merakit disk image macOS asli (`OPUNG-Installer.dmg`) langsung di browser maupun lewat skrip `npx tsx scripts/build-dmg.mjs`.
 
 ---
 
-## Panduan Instalasi & Penggunaan di macOS
+## Arsitektur Native Windows (`Opung-Windows-x64.exe`)
 
-### 1. Pasang Aplikasi dari `OPUNG-Installer.dmg`
-1. Klik tombol **Unduh untuk macOS (.dmg)** pada halaman aplikasi untuk mengunduh file `OPUNG-Installer.dmg`.
-2. Klik 2x file **`OPUNG-Installer.dmg`** di folder `Downloads`, lalu **geser (*drag & drop*) `Opung.app` ke folder `Applications`**.
-3. Buka folder `Applications`, lalu pada **`Opung.app`** lakukan **Klik Kanan (2 jari) &rarr; pilih Open** (hanya diperlukan saat pertama kali dibuka).
+Untuk Windows 10 dan Windows 11, proyek ini menyediakan host desktop **Native Windows** di folder `windows/`:
 
-### 2. Hubungkan ke Google Meet / Zoom
-1. Pastikan di dalam jendela **Opung**, bagian **Mikrofon Input** memilih mikrofon fisik Anda (mis. *MacBook Pro Microphone*), dan bagian **Output ke Google Meet / Zoom** berstatus hijau **`Terhubung ke BlackHole 2ch ✓`**.
-2. Buka pengaturan **Audio** di **Google Meet**, **Zoom**, atau **Microsoft Teams**:
-   - **Microphone (Input)**: Pilih **`BlackHole 2ch`**
-   - **Speakers (Output)**: Pilih **Speaker MacBook** atau **Earphone/AirPods** Anda.
+- **UI & System Tray Host (`windows/MainForm.cs`)**: Aplikasi `.NET 8 WinForms` single-file (`Opung-Windows-x64.exe`) menggunakan **Microsoft Edge WebView2** bawaan Windows, jendela kompak `390px` auto-fit tinggi konten, izin mikrofon otomatis, dan ikon **System Tray** di kanan bawah taskbar.
+- **NAudio WASAPI Bridge**: Menerima audio bersih 48 kHz langsung dari mesin DSP Opung melalui `window.chrome.webview.postMessage` dan mengalirkannya via **WASAPI** ke driver virtual mic gratis **[VB-CABLE](https://vb-audio.com/Cable/)** (`CABLE Input (VB-Audio Virtual Cable)`).
+- **Build Otomatis GitHub Releases**: Workflow `.github/workflows/release.yml` otomatis mengompilasi `Opung-Windows-x64.exe` di runner `windows-latest` dan menerbitkannya berdampingan dengan `OPUNG-Installer.dmg` di halaman **GitHub Releases**.
+- **Fallback Portabel Web (`src/utils/windowsAppBuilder.ts`)**: Jika file `.exe` belum di-host di web server, tombol **Unduh untuk Windows (.exe)** tetap mengunduh `Opung-Windows-Launcher.zip` berisi `Opung-Windows.bat` (Edge App-mode) yang langsung bisa dijalankan di Windows tanpa instalasi rumit.
 
 ---
 
-## Menjalankan Proyek Secara Lokal (Development)
+## Panduan Instalasi & Penggunaan
 
-Proyek ini menggunakan **React 19**, **TypeScript**, **Tailwind CSS v4**, dan **Vite**.
+### Di macOS (`OPUNG-Installer.dmg`)
+1. Unduh **`OPUNG-Installer.dmg`** dari web aplikasi atau halaman **GitHub Releases**.
+2. Klik 2x **`OPUNG-Installer.dmg`**, lalu **geser (`drag & drop`) `Opung.app` ke folder `Applications`**.
+3. Buka folder `Applications`, **Klik Kanan (2 jari) &rarr; Open** pada `Opung.app`.
+4. Di pengaturan Audio **Google Meet / Zoom / Teams**, pilih Microphone: **`BlackHole 2ch`**.
+
+### Di Windows 10 / 11 (`Opung-Windows-x64.exe`)
+1. Pasang driver virtual mic gratis **[VB-Audio Virtual Cable (VB-CABLE)](https://vb-audio.com/Cable/)** (*Run as administrator* `VBCABLE_Setup_x64.exe` &rarr; *Install Driver*).
+2. Unduh dan jalankan **`Opung-Windows-x64.exe`** dari **GitHub Releases** (atau ekstrak `Opung-Windows-Launcher.zip` dan klik 2x `Opung-Windows.bat`).
+3. Pastikan status di jendela Opung berbunyi hijau **`Terhubung ke VB-CABLE ✓`**.
+4. Di pengaturan Audio **Google Meet / Zoom / Teams**, pilih Microphone: **`CABLE Output (VB-Audio Virtual Cable)`**.
+
+---
+
+## Menjalankan & Mem-build Proyek Secara Lokal
 
 ### Prasyarat
-- **Node.js** `v18+` atau `v20+`
-- **npm** `v9+`
+- **Node.js** `v18+` atau `v20+` & **npm** `v9+`
+- *(Opsional, untuk build `.exe` lokal di Windows)* **.NET 8 SDK** (`win-x64`)
 
-### Langkah Menjalankan
+### Perintah Development & Build
 ```bash
-# 1. Clone repositori
-git clone <url-repositori-anda>
-cd opung
-
-# 2. Instal seluruh dependensi
+# 1. Instal dependensi
 npm install
 
-# 3. Jalankan server pengembangan (http://localhost:3000)
+# 2. Jalankan server pengembangan web (http://localhost:3000)
 npm run dev
-```
 
-### Perintah Build & Verifikasi
-```bash
-# Cek tipe TypeScript (Linter)
+# 3. Cek tipe TypeScript & build produksi web
 npm run lint
-
-# Build produksi ke folder dist/
 npm run build
+
+# 4. Cetak installer macOS (OPUNG-Installer.dmg)
+npx tsx scripts/build-dmg.mjs
+
+# 5. Siapkan aset & build Opung-Windows-x64.exe (di Windows dengan .NET 8 SDK)
+npx tsx scripts/prepare-windows-assets.mjs
+dotnet publish windows/Opung.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o release-win
 ```
 
 ---
@@ -127,20 +135,30 @@ npm run build
 ## Struktur Direktori
 
 ```text
+├── .github/workflows/
+│   └── release.yml                      # CI/CD build otomatis .dmg (macOS) & .exe (Windows) ke GitHub Releases
 ├── public/
-│   ├── opung-icon.png                  # Ikon resmi aplikasi Opung (macOS Squircle)
-│   ├── demo-voice-office-chatter.mp3   # Rekaman suara manusia Bahasa Indonesia (Skenario 1)
-│   ├── demo-voice-drill-keyboard.mp3   # Rekaman suara manusia Bahasa Indonesia (Skenario 2)
-│   ├── demo-voice-speaker-echo.mp3     # Rekaman suara manusia Bahasa Indonesia (Skenario 3)
-│   └── demo-bg-chatter.mp3             # Audio simulasi obrolan latar meja sebelah
+│   ├── opung-icon.png                   # Ikon resmi aplikasi Opung
+│   └── demo-*.mp3                       # Audio demo Bahasa Indonesia asli
+├── scripts/
+│   ├── build-dmg.mjs                    # Generator OPUNG-Installer.dmg lewat CLI
+│   └── prepare-windows-assets.mjs       # Sinkronisasi index.html & AppIcon.ico ke project Windows
+├── windows/
+│   ├── Opung.csproj                     # Project .NET 8 WinForms single-file (WebView2 + NAudio)
+│   ├── Program.cs                       # Entry point single-instance Windows
+│   ├── MainForm.cs                      # System Tray, WebView2 Host & WASAPI VB-CABLE Bridge
+│   └── Resources/                       # Aset tersemat (AppIcon.ico & index.html)
 ├── src/
 │   ├── components/
-│   │   └── MacOSDesktopAppWorkspace.tsx # Mesin DSP WebAudio real-time & simulasi jendela Opung
+│   │   └── MacOSDesktopAppWorkspace.tsx # Mesin DSP WebAudio real-time & jendela kontrol Opung
 │   ├── utils/
-│   │   └── macosAppBuilder.ts           # Generator Native Objective-C, CoreAudio HAL & HFS+ .DMG Builder
-│   ├── App.tsx                          # Halaman utama & pemutar uji banding audio interaktif
+│   │   ├── audioDeviceFilters.ts        # Klasifikasi perangkat virtual mic (BlackHole 2ch & VB-CABLE)
+│   │   ├── macosAppBuilder.ts           # Generator Native macOS Cocoa/HAL & HFS+ .DMG Builder
+│   │   └── windowsAppBuilder.ts         # Generator .ICO & Windows Launcher .ZIP fallback
+│   ├── App.tsx                          # Halaman utama, pemutar uji banding & panduan macOS/Windows
 │   ├── main.tsx                         # Entry point aplikasi React
 │   └── index.css                        # Konfigurasi tema gelap & tipografi Tailwind CSS
+├── LICENSE                              # MIT License (Copyright (c) 2026 Muhammad Zen)
 ├── index.html                           # Entry HTML & metadata SEO/OpenGraph
 └── package.json                         # Konfigurasi skrip dan dependensi proyek
 ```

@@ -14,6 +14,16 @@ import {
 import {
   buildMacOSDiskImageDmg,
 } from '../utils/macosAppBuilder';
+import {
+  downloadWindowsOpungApp,
+} from '../utils/windowsAppBuilder';
+import {
+  isDeprecatedOpungDriverLabel,
+  isVirtualCableLabel,
+  isAnyVirtualOrDeprecatedInputLabel,
+  isPhysicalSpeakerOrEarphoneLabel,
+  formatConnectedVirtualMicBadge,
+} from '../utils/audioDeviceFilters';
 
 const RNNOISE_FRAME_SIZE = 480;
 const RING_CAPACITY = 4096;
@@ -275,7 +285,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   const [selectedOutputId, setSelectedOutputId] = useState<string>('');
   const [sinkConnectedText, setSinkConnectedText] = useState<string>('Siap');
   const [micError, setMicError] = useState<string | null>(null);
-  const [downloadBanner, setDownloadBanner] = useState<string | null>(null);
+  const [downloadBanner, setDownloadBanner] = useState<{
+    title: string;
+    detail: string;
+  } | null>(null);
+  const [isDownloadingWin, setIsDownloadingWin] = useState<boolean>(false);
 
   const [liveStats, setLiveStats] = useState<{
     rawPct: number;
@@ -410,53 +424,9 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     isMicRunningRef.current = isMicRunning;
   }, [isMicRunning]);
 
-  const isDeprecatedOpungDriverLabel = (label: string) => {
-    const l = (label || '').toLowerCase();
-    return l.includes('opung');
-  };
-
-  const isVirtualCableLabel = (label: string) => {
-    const l = (label || '').toLowerCase();
-    if (isDeprecatedOpungDriverLabel(l)) return false;
-    return (
-      l.includes('blackhole') ||
-      l.includes('vb-cable') ||
-      l.includes('soundflower') ||
-      l.includes('loopback') ||
-      l.includes('existential') ||
-      l.includes('virtual')
-    );
-  };
-
-  const isAnyVirtualOrDeprecatedInputLabel = (label: string) => {
-    const l = (label || '').toLowerCase();
-    return (
-      l.includes('opung') ||
-      l.includes('blackhole') ||
-      l.includes('vb-cable') ||
-      l.includes('soundflower') ||
-      l.includes('loopback') ||
-      l.includes('existential') ||
-      l.includes('virtual') ||
-      l.includes('aggregate')
-    );
-  };
-
-  const isPhysicalSpeakerOrEarphoneLabel = (label: string) => {
-    const l = (label || '').toLowerCase();
-    if (isAnyVirtualOrDeprecatedInputLabel(l)) return false;
-    return (
-      l.includes('headphone') ||
-      l.includes('earphone') ||
-      l.includes('airpods') ||
-      l.includes('speaker') ||
-      l.includes('built-in') ||
-      l.includes('macbook') ||
-      l.includes('hdmi') ||
-      l.includes('displayport') ||
-      l.includes('bluetooth')
-    );
-  };
+  const isWindowsBrowser =
+    typeof navigator !== 'undefined' &&
+    /windows|win32|win64/i.test(navigator.userAgent || '');
 
   const pickBestPhysicalInputDevice = (
     inputs: MediaDeviceInfo[],
@@ -578,7 +548,9 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         if (audioEl.paused) {
           await audioEl.play().catch(() => {});
         }
-        setSinkConnectedText('Terhubung ke BlackHole 2ch ✓');
+        setSinkConnectedText(
+          formatConnectedVirtualMicBadge(chosenDev?.label, isWindowsBrowser)
+        );
         return;
       }
 
@@ -599,9 +571,13 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             audioEl.volume = 1.0;
             audioEl.muted = false;
             await audioEl.play().catch(() => {});
-            setSinkConnectedText('Terhubung ke BlackHole 2ch ✓');
+            setSinkConnectedText(
+              formatConnectedVirtualMicBadge(chosenDev?.label, isWindowsBrowser)
+            );
           } else {
-            setSinkConnectedText('Terhubung ke BlackHole 2ch ✓');
+            setSinkConnectedText(
+              formatConnectedVirtualMicBadge(chosenDev?.label, isWindowsBrowser)
+            );
           }
         } else {
           // JANGAN PERNAH unmute jika setSinkId tidak didukung, karena akan bocor ke Earphone Default!
@@ -1313,9 +1289,30 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    setDownloadBanner(
-      'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, geser OPUNG.app ke folder Applications, lalu buka aplikasinya.'
-    );
+    setDownloadBanner({
+      title: 'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, geser OPUNG.app ke folder Applications, lalu buka aplikasinya.',
+      detail: 'Saat pertama kali membuka aplikasi Opung di Applications, cukup Klik Kanan (2 jari) → pilih Open.',
+    });
+  };
+
+  const handleDownloadWindowsApp = async () => {
+    setIsDownloadingWin(true);
+    try {
+      const res = await downloadWindowsOpungApp();
+      if (res.mode === 'exe') {
+        setDownloadBanner({
+          title: 'Opung-Windows-x64.exe berhasil diunduh!',
+          detail: 'Jalankan file Opung-Windows-x64.exe, lalu pilih CABLE Output (VB-Audio Virtual Cable) sebagai mikrofon di Google Meet / Zoom.',
+        });
+      } else {
+        setDownloadBanner({
+          title: 'Opung-Windows-Launcher.zip berhasil diunduh!',
+          detail: 'Ekstrak ZIP ini, lalu klik 2x Opung-Windows.bat (memakai Edge App-mode ringan). Untuk single-file .exe native, unduh Opung-Windows-x64.exe di halaman GitHub Releases.',
+        });
+      }
+    } finally {
+      setIsDownloadingWin(false);
+    }
   };
 
   const distanceText =
@@ -1330,7 +1327,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       id="macos-desktop-app-live"
       className="border border-slate-800/90 bg-[#0D1119] rounded-2xl p-6 sm:p-8"
     >
-      {/* Hidden Audio Elements for Virtual Mic (BlackHole 2ch) and Earphone Loopback */}
+      {/* Hidden Audio Elements for Virtual Mic (BlackHole 2ch / VB-CABLE) and Earphone Loopback */}
       <audio ref={virtualSinkAudioRef} playsInline className="hidden" />
       <audio ref={earphoneAudioRef} playsInline className="hidden" />
 
@@ -1338,21 +1335,20 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-800/80">
         <div>
           <div className="text-xs font-mono text-sky-400 mb-2">
-            OPUNG — OFFICE PROXIMITY ULTRA NOISE GATE · MENU BAR MACOS + BLACKHOLE 2CH
+            OPUNG — OFFICE PROXIMITY ULTRA NOISE GATE · MACOS &amp; WINDOWS
           </div>
           <h2
             className="font-display text-2xl sm:text-3xl font-bold text-slate-100 tracking-tight"
             style={{ textWrap: 'balance' }}
           >
-            Muncul di Menu Bar Atas Mac &amp; Terhubung Langsung ke BlackHole 2ch untuk Google Meet
+            Aplikasi Desktop Ringan untuk macOS (BlackHole 2ch) &amp; Windows (VB-CABLE)
           </h2>
           <p className="text-sm text-slate-400 mt-2 max-w-2xl leading-relaxed">
-            Begitu dipasang dari <strong className="text-sky-300">OPUNG-Installer.dmg</strong> ke{' '}
-            <strong className="text-slate-200">Applications</strong>,{' '}
-            <strong className="text-sky-300">logo Opung</strong> langsung muncul di{' '}
-            <strong className="text-slate-200">Menu Bar kanan atas macOS (samping baterai/Wi-Fi)</strong>{' '}
-            dan mengalirkan suara jernih Anda ke <strong className="text-emerald-300">BlackHole 2ch</strong>{' '}
-            untuk Google Meet &amp; Zoom.
+            Di macOS, logo <strong className="text-sky-300">Opung</strong> muncul di{' '}
+            <strong className="text-slate-200">Menu Bar kanan atas</strong> &amp; mengalir ke{' '}
+            <strong className="text-emerald-300">BlackHole 2ch</strong>. Di Windows, berjalan di{' '}
+            <strong className="text-slate-200">System Tray</strong> &amp; mengalir ke{' '}
+            <strong className="text-emerald-300">VB-CABLE</strong> untuk Google Meet &amp; Zoom.
           </p>
         </div>
 
@@ -1360,10 +1356,20 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           <button
             type="button"
             onClick={handleDownloadMacDmg}
-            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold bg-sky-400 hover:bg-sky-300 text-slate-950 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold bg-sky-400 hover:bg-sky-300 text-slate-950 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
             <Download className="w-4 h-4 shrink-0" />
             Unduh Opung (.dmg)
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadWindowsApp}
+            disabled={isDownloadingWin}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold bg-emerald-400 hover:bg-emerald-300 text-slate-950 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Download className="w-4 h-4 shrink-0" />
+            {isDownloadingWin ? 'Menyiapkan .exe...' : 'Unduh Opung (.exe)'}
           </button>
 
           <button
@@ -1390,11 +1396,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         <div className="mt-5 p-4 rounded-xl border border-emerald-500/40 bg-emerald-950/20 text-xs text-emerald-200 flex items-start gap-3">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <div className="font-semibold text-emerald-300">{downloadBanner}</div>
-            <div className="text-slate-300">
-              Saat pertama kali membuka aplikasi Opung di Applications, cukup{' '}
-              <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>.
-            </div>
+            <div className="font-semibold text-emerald-300">{downloadBanner.title}</div>
+            <div className="text-slate-300">{downloadBanner.detail}</div>
           </div>
         </div>
       )}

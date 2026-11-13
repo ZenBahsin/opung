@@ -1,0 +1,1432 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Opung - Office Proximity Ultra Noise Gate</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #090d16;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+      overflow: hidden;
+    }
+    body {
+      padding: 12px 15px 9px 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+    }
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(14, 165, 233, 0.25);
+    }
+    .engine-meta {
+      font-size: 10.5px;
+      color: #94a3b8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    /* Krisp-Style Hero Toggle Card */
+    .hero-switch-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: #111827;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      padding: 11px 14px;
+      border-radius: 13px;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .hero-switch-card.active {
+      background: #0f1b2d;
+      border-color: rgba(56, 189, 248, 0.45);
+    }
+    .switch-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 2px;
+    }
+    .switch-sub {
+      font-size: 10.5px;
+      color: #94a3b8;
+      line-height: 1.3;
+    }
+    .toggle-track {
+      width: 46px;
+      height: 25px;
+      border-radius: 999px;
+      background: #334155;
+      padding: 3px;
+      display: flex;
+      align-items: center;
+      transition: background 0.18s ease;
+      flex-shrink: 0;
+      border: none;
+      cursor: pointer;
+    }
+    .toggle-track.active {
+      background: #0284c7;
+    }
+    .toggle-thumb {
+      width: 19px;
+      height: 19px;
+      border-radius: 50%;
+      background: #ffffff;
+      transform: translateX(0);
+      transition: transform 0.18s ease;
+    }
+    .toggle-track.active .toggle-thumb {
+      transform: translateX(21px);
+    }
+
+    /* Clean Device Card */
+    .device-card {
+      background: #111827;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 13px;
+      padding: 11px 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .field-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 5px;
+    }
+    .field-status {
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #38bdf8;
+    }
+    .sink-status {
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #34d399;
+    }
+    select {
+      width: 100%;
+      background: #090d16;
+      color: #f1f5f9;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 9px;
+      padding: 8px 10px;
+      font-size: 11.5px;
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus {
+      border-color: #38bdf8;
+    }
+
+    /* Segmented Radius Selector */
+    .radius-section {
+      background: #111827;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 13px;
+      padding: 10px 13px;
+    }
+    .segmented-bar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      background: #090d16;
+      padding: 3.5px;
+      border-radius: 9px;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      margin-top: 5px;
+    }
+    .seg-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 5.5px 4px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .seg-btn.selected {
+      background: #1e293b;
+      color: #38bdf8;
+    }
+    .slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 6px;
+    }
+    input[type="range"] {
+      flex: 1;
+      accent-color: #38bdf8;
+      cursor: pointer;
+      height: 4px;
+    }
+
+    /* Compact Live Visualizer Card */
+    .meter-card {
+      background: #111827;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 13px;
+      padding: 10px 13px;
+    }
+    .meter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+    .gate-state {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10.5px;
+      font-weight: 600;
+      color: #38bdf8;
+    }
+    canvas {
+      width: 100%;
+      height: 74px;
+      display: block;
+      background: #090d16;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .meter-footer {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    /* Single Quiet Self-Test Button */
+    .test-btn {
+      width: 100%;
+      padding: 8.5px 12px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: #111827;
+      color: #cbd5e1;
+      text-align: center;
+      transition: all 0.15s ease;
+    }
+    .test-btn:hover {
+      border-color: rgba(148, 163, 184, 0.35);
+      color: #ffffff;
+    }
+    .test-btn.on {
+      background: rgba(16, 185, 129, 0.14);
+      border-color: rgba(16, 185, 129, 0.5);
+      color: #34d399;
+    }
+    .app-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 4px;
+      padding-bottom: 0;
+      margin-top: 0;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+      font-size: 10px;
+      line-height: 1.2;
+      color: #64748b;
+    }
+    .app-footer .heart-icon {
+      color: #f43f5e;
+      font-size: 10.5px;
+      display: inline-block;
+      margin: 0 1px;
+    }
+    .app-footer .author-name {
+      color: #cbd5e1;
+      font-weight: 600;
+    }
+    .app-footer .ver-badge {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 9.5px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="brand">
+      <svg class="brand-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="64" height="64" rx="15" fill="#0B1325"/>
+        <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" stroke="#38BDF8" stroke-opacity="0.35" stroke-width="1.5"/>
+        <circle cx="32" cy="32" r="18" stroke="#F0F9FF" stroke-width="7.5"/>
+        <rect x="24" y="29" width="2.4" height="6" rx="1.2" fill="#38BDF8"/>
+        <rect x="27.8" y="25.5" width="2.4" height="13" rx="1.2" fill="#67E8F9"/>
+        <rect x="31.6" y="22" width="2.8" height="20" rx="1.4" fill="#38BDF8"/>
+        <rect x="35.8" y="25.5" width="2.4" height="13" rx="1.2" fill="#67E8F9"/>
+        <rect x="39.6" y="29" width="2.4" height="6" rx="1.2" fill="#38BDF8"/>
+      </svg>
+      <span>Opung</span>
+    </span>
+    <span id="engineStatus" class="engine-meta">Office Proximity Ultra Noise Gate</span>
+  </div>
+
+  <!-- Krisp-Style Single Master Switch -->
+  <div id="heroSwitchCard" class="hero-switch-card active">
+    <div>
+      <div id="statusText" class="switch-title">Peredam Bising &amp; Fokus Suara Aktif</div>
+      <div id="hintText" class="switch-sub">Otomatis menjernihkan suara HD, mengupas bising latar &amp; memblokir obrolan &gt; 1m</div>
+    </div>
+    <button id="toggleBtn" class="toggle-track active" type="button" aria-label="Sakelar Utama Peredam Bising">
+      <span class="toggle-thumb"></span>
+    </button>
+  </div>
+
+  <!-- Pilihan Perangkat Audio -->
+  <div class="device-card">
+    <div>
+      <div class="field-header">
+        <span>Mikrofon Input</span>
+        <button id="refreshDevsBtn" type="button" style="background:none;border:none;color:#38bdf8;font-size:10px;cursor:pointer;padding:0;">Segarkan</button>
+      </div>
+      <select id="micInputSelect" aria-label="Pilih Mikrofon"></select>
+    </div>
+    <div>
+      <div class="field-header">
+        <span>Output ke Google Meet / Zoom</span>
+        <span id="sinkBadge" class="sink-status">Otomatis</span>
+      </div>
+      <select id="virtualOutputSelect" aria-label="Pilih Output Virtual"></select>
+    </div>
+  </div>
+
+  <!-- Radius Jarak (3 Pilihan Bersih) -->
+  <div class="radius-section">
+    <div class="field-header" style="margin-bottom: 2px;">
+      <span>Radius Fokus Suara</span>
+      <span id="dbValueText" class="field-status">-26 dB (&le; 1.0m)</span>
+    </div>
+    <div class="segmented-bar">
+      <button id="preset05m" class="seg-btn" type="button">Dekat (0.5m)</button>
+      <button id="preset1m" class="seg-btn selected" type="button">Kantor (1.0m)</button>
+      <button id="presetStd" class="seg-btn" type="button">Ruang (1.5m)</button>
+    </div>
+    <div class="slider-wrap">
+      <span>Longgar</span>
+      <input id="thresholdSlider" type="range" min="-42" max="-14" step="1" value="-26" aria-label="Batas Sensitivitas Jarak" />
+      <span>Ketat</span>
+    </div>
+  </div>
+
+  <!-- Grafik Visualizer Bersih -->
+  <div class="meter-card">
+    <div class="meter-header">
+      <span>Monitor Suara Real-Time</span>
+      <span id="gateStatusBadge" class="gate-state">Hening · 0.00x</span>
+    </div>
+    <canvas id="spectrumCanvas" width="340" height="82"></canvas>
+    <div class="meter-footer">
+      <span>Input Mentah: <strong id="rawPct" style="color:#fb7185;">0%</strong></span>
+      <span id="gainLabel">Gain: 0.00x</span>
+      <span>Output Bersih: <strong id="cleanPct" style="color:#38bdf8;">0%</strong></span>
+    </div>
+  </div>
+
+  <!-- Satu Tombol Tes Suara di Bawah -->
+  <button id="loopbackBtn" class="test-btn" type="button">
+    Tes Dengar Suara Sendiri (Gunakan Earphone)
+  </button>
+
+  <!-- Copyright & Version Footer -->
+  <div class="app-footer">
+    <span>&copy; 2026 Opung &middot; Made with <span class="heart-icon">&hearts;</span> <span class="author-name">Muhammad Zen</span></span>
+    <span class="ver-badge">Versi 1.0</span>
+  </div>
+
+  <audio id="virtualCableAudioOut" playsinline muted></audio>
+  <audio id="earphoneLoopbackOut" playsinline muted></audio>
+
+  <script>
+    const RNNOISE_FRAME_SIZE = 480;
+    const RING_CAPACITY = 4096;
+    const PCM16_SCALE = 32768.0;
+
+    class CircularFloat32Buffer {
+      constructor(capacity = RING_CAPACITY) {
+        this.capacity = capacity;
+        this.mask = capacity - 1;
+        this.storage = new Float32Array(capacity);
+        this.writePtr = 0;
+        this.readPtr = 0;
+        this.available = 0;
+      }
+      pushScaled(src, count, scale = 1.0) {
+        if (count > this.capacity - this.available) return false;
+        for (let i = 0; i < count; i++) {
+          this.storage[this.writePtr] = src[i] * scale;
+          this.writePtr = (this.writePtr + 1) & this.mask;
+        }
+        this.available += count;
+        return true;
+      }
+      pullScaled(dst, offset, count, scale = 1.0) {
+        if (this.available < count) return false;
+        for (let i = 0; i < count; i++) {
+          let s = this.storage[this.readPtr] * scale;
+          if (scale !== 1.0) s = s > 1.0 ? 1.0 : s < -1.0 ? -1.0 : s;
+          dst[offset + i] = s;
+          this.readPtr = (this.readPtr + 1) & this.mask;
+        }
+        this.available -= count;
+        return true;
+      }
+      clear() {
+        this.writePtr = 0;
+        this.readPtr = 0;
+        this.available = 0;
+        this.storage.fill(0);
+      }
+    }
+
+    class NearFieldRNNoiseDspCore {
+      constructor() {
+        this.inputRing = new CircularFloat32Buffer(RING_CAPACITY);
+        this.outputRing = new CircularFloat32Buffer(RING_CAPACITY);
+        this.frame480 = new Float32Array(RNNOISE_FRAME_SIZE);
+        this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
+        this.smoothedGain = 0.0;
+        this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;
+        this.scLpY = 0;
+        this.prevSample = 0;
+        this.noiseFloorRms = 120.0;
+        this.holdCounter = 0;
+        this.holdFrames = 26;
+        this.lastFrameDb = -75;
+        this.isGateOpen = false;
+        this.wasEnabled = true;
+      }
+
+      resetRings() {
+        this.inputRing.clear();
+        this.outputRing.clear();
+        this.frame480.fill(0);
+        this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
+        this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;
+        this.scLpY = 0;
+        this.prevSample = 0;
+        this.noiseFloorRms = 120.0;
+        this.holdCounter = 0;
+        this.smoothedGain = 0.0;
+      }
+
+      processFrame480(frame, thresholdDb, isLoopbackTest = false) {
+        let vocalBandEnergy = 0;
+        let totalEnergy = 0;
+        let zeroCrossings = 0;
+
+        for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
+          const x0 = frame[i];
+          if ((x0 >= 0 && this.hpX1 < 0) || (x0 < 0 && this.hpX1 >= 0)) {
+            zeroCrossings++;
+          }
+          const yHp = 0.9888 * x0 - 1.9776 * this.hpX1 + 0.9888 * this.hpX2 + 1.9774 * this.hpY1 - 0.9778 * this.hpY2;
+          this.hpX2 = this.hpX1; this.hpX1 = x0;
+          this.hpY2 = this.hpY1; this.hpY1 = yHp;
+          this.scLpY += 0.33 * (yHp - this.scLpY);
+          vocalBandEnergy += this.scLpY * this.scLpY;
+          totalEnergy += yHp * yHp;
+        }
+
+        const vocalRms = Math.sqrt(vocalBandEnergy / RNNOISE_FRAME_SIZE);
+        const totalRms = Math.sqrt(totalEnergy / RNNOISE_FRAME_SIZE);
+
+        if (totalRms < this.noiseFloorRms) {
+          this.noiseFloorRms = 0.92 * this.noiseFloorRms + 0.08 * totalRms;
+        } else {
+          this.noiseFloorRms = 0.9985 * this.noiseFloorRms + 0.0015 * totalRms;
+        }
+        this.noiseFloorRms = Math.max(40.0, Math.min(4500.0, this.noiseFloorRms));
+
+        const normRms = Math.max(1e-7, vocalRms / PCM16_SCALE);
+        let frameDb = 20.0 * Math.log10(normRms);
+
+        // Diskriminator ZCR otomatis aktif: suara bor/ketikan (> 135 ZCR) tidak akan membuka gerbang
+        if (zeroCrossings > 135) {
+          frameDb -= 12.0;
+        }
+
+        this.lastFrameDb = Math.round(frameDb);
+
+        // Anti-Cave-Echo Guard saat Tes Dengar Suara Sendiri aktif:
+        // Pantulan speaker yang datang ~120ms kemudian memiliki energi lebih rendah dari puncak suara asli,
+        // sehingga ditahan agar tidak memicu ulang gerbang (mencegah efek gema berulang seperti di goa).
+        if (this.echoGuardDecayDb === undefined) {
+          this.echoGuardDecayDb = -80.0;
+        }
+        this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);
+        const effectiveThresholdDb = isLoopbackTest
+          ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)
+          : thresholdDb;
+        const activeHoldFrames = isLoopbackTest ? 9 : this.holdFrames;
+
+        let targetGain = 0.0;
+        if (frameDb >= effectiveThresholdDb) {
+          targetGain = 1.0;
+          this.holdCounter = activeHoldFrames;
+          if (frameDb > this.echoGuardDecayDb) {
+            this.echoGuardDecayDb = frameDb;
+          }
+        } else if (this.holdCounter > 0) {
+          this.holdCounter--;
+          targetGain = 1.0;
+        } else {
+          targetGain = 0.0;
+        }
+
+        this.isGateOpen = targetGain > 0.5;
+
+        // Wiener Intra-Speech Denoising otomatis aktif saat bicara
+        let intraSpeechDenoiseGain = 1.0;
+        if (this.isGateOpen) {
+          const snr = Math.max(0.0, totalRms - this.noiseFloorRms * 1.25) / (totalRms + 1.0);
+          intraSpeechDenoiseGain = Math.max(0.28, Math.min(1.0, snr * 1.15));
+        }
+
+        const effectiveTargetGain = targetGain * intraSpeechDenoiseGain;
+        const maxVocalSlew = 5200.0;
+
+        for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
+          let sample = frame[i];
+          const delta = sample - this.prevSample;
+          if (delta > maxVocalSlew || delta < -maxVocalSlew) {
+            sample = this.prevSample + delta * 0.22;
+          }
+          this.prevSample = sample;
+
+          const coeff = effectiveTargetGain > this.smoothedGain ? 0.12 : 0.008;
+          this.smoothedGain += coeff * (effectiveTargetGain - this.smoothedGain);
+          if (this.smoothedGain < 0.004 && targetGain === 0.0) {
+            this.smoothedGain = 0.0;
+          }
+          frame[i] = sample * this.smoothedGain;
+        }
+      }
+
+      processAudioBlock(inputBuffer, outputBuffer, enabled, thresholdDb, isLoopbackTest = false) {
+        if (!enabled) {
+          this.wasEnabled = false;
+          outputBuffer.set(inputBuffer);
+          this.isGateOpen = true;
+          this.smoothedGain = 1.0;
+          return;
+        }
+        if (!this.wasEnabled) {
+          this.resetRings();
+          this.wasEnabled = true;
+        }
+        this.inputRing.pushScaled(inputBuffer, inputBuffer.length, PCM16_SCALE);
+        while (this.inputRing.available >= RNNOISE_FRAME_SIZE) {
+          this.inputRing.pullScaled(this.frame480, 0, RNNOISE_FRAME_SIZE, 1.0);
+          this.processFrame480(this.frame480, thresholdDb, isLoopbackTest);
+          this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
+        }
+        if (!this.outputRing.pullScaled(outputBuffer, 0, outputBuffer.length, 1.0 / PCM16_SCALE)) {
+          outputBuffer.fill(0);
+        }
+        if (this.smoothedGain === 0.0) {
+          outputBuffer.fill(0);
+        }
+      }
+    }
+
+    const heroSwitchCard = document.getElementById('heroSwitchCard');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const statusText = document.getElementById('statusText');
+    const hintText = document.getElementById('hintText');
+    const gainLabel = document.getElementById('gainLabel');
+    const micInputSelect = document.getElementById('micInputSelect');
+    const virtualOutputSelect = document.getElementById('virtualOutputSelect');
+    const sinkBadge = document.getElementById('sinkBadge');
+    const dbValueText = document.getElementById('dbValueText');
+    const thresholdSlider = document.getElementById('thresholdSlider');
+    const preset05m = document.getElementById('preset05m');
+    const preset1m = document.getElementById('preset1m');
+    const presetStd = document.getElementById('presetStd');
+    const loopbackBtn = document.getElementById('loopbackBtn');
+    const gateStatusBadge = document.getElementById('gateStatusBadge');
+    const rawPctEl = document.getElementById('rawPct');
+    const cleanPctEl = document.getElementById('cleanPct');
+    const virtualCableAudioOut = document.getElementById('virtualCableAudioOut');
+    const earphoneLoopbackOut = document.getElementById('earphoneLoopbackOut');
+    const canvas = document.getElementById('spectrumCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Semua fitur positif (HD Voice EQ, Neural Krisp Denoiser, Speaker Echo Guard) OTOMATIS AKTIF!
+    let isEnabled = true;
+    let thresholdDb = -26;
+    let loopbackAudible = false;
+    let audioCtx = null;
+    let rawAnalyser = null;
+    let cleanAnalyser = null;
+    let activeMakeupGainNode = null;
+    let dspCore = new NearFieldRNNoiseDspCore();
+    let currentMicStream = null;
+    let currentCleanStream = null;
+    let selectedVirtualSinkId = '';
+    let nativeCoreAudioSinkActive = false;
+
+    const isWindowsPlatform = /windows|win32|win64/i.test(navigator.userAgent || '');
+
+    function hasWebKitAudioBridge() {
+      return Boolean(
+        window.webkit &&
+        window.webkit.messageHandlers &&
+        window.webkit.messageHandlers.opungAudioBridge
+      );
+    }
+
+    function hasWebView2AudioBridge() {
+      return Boolean(
+        window.chrome &&
+        window.chrome.webview &&
+        typeof window.chrome.webview.postMessage === 'function'
+      );
+    }
+
+    function hasNativeCoreAudioBridge() {
+      return hasWebKitAudioBridge() || hasWebView2AudioBridge();
+    }
+
+    function sendNativeBridgeCommand(cmd) {
+      if (hasWebKitAudioBridge()) {
+        try {
+          window.webkit.messageHandlers.opungAudioBridge.postMessage(cmd);
+        } catch (_e) {}
+      } else if (hasWebView2AudioBridge()) {
+        try {
+          window.chrome.webview.postMessage(cmd);
+        } catch (_e) {}
+      }
+    }
+
+    if (hasWebView2AudioBridge() && typeof window.chrome.webview.addEventListener === 'function') {
+      window.chrome.webview.addEventListener('message', (event) => {
+        const msg = typeof event.data === 'string' ? event.data : '';
+        if (msg === 'VBCABLE_MISSING') {
+          nativeCoreAudioSinkActive = false;
+          sinkBadge.textContent = 'VB-CABLE Belum Terpasang';
+          sinkBadge.style.color = '#fbbf24';
+        } else if (msg === 'VBCABLE_READY') {
+          nativeCoreAudioSinkActive = true;
+          sinkBadge.textContent = 'Terhubung ke VB-CABLE ✓';
+          sinkBadge.style.color = '#34d399';
+        }
+      });
+    }
+
+    function fitNativeWindowHeight() {
+      const h = document.body ? document.body.offsetHeight : 0;
+      if (h > 400) {
+        sendNativeBridgeCommand('HEIGHT:' + h);
+      }
+    }
+    window.addEventListener('DOMContentLoaded', fitNativeWindowHeight);
+    window.addEventListener('load', () => {
+      fitNativeWindowHeight();
+      setTimeout(fitNativeWindowHeight, 120);
+    });
+
+    function isDeprecatedOpungDriverLabel(label) {
+      const l = (label || '').toLowerCase();
+      return l.includes('opung');
+    }
+
+    function isVirtualCableLabel(label) {
+      const l = (label || '').toLowerCase();
+      if (isDeprecatedOpungDriverLabel(l)) return false;
+      return (
+        l.includes('blackhole') ||
+        l.includes('vb-cable') ||
+        l.includes('cable input') ||
+        l.includes('cable output') ||
+        l.includes('vb-audio') ||
+        l.includes('voicemeeter') ||
+        l.includes('soundflower') ||
+        l.includes('loopback') ||
+        l.includes('existential') ||
+        l.includes('virtual')
+      );
+    }
+
+    function isAnyVirtualOrDeprecatedInputLabel(label) {
+      const l = (label || '').toLowerCase();
+      return (
+        l.includes('opung') ||
+        l.includes('blackhole') ||
+        l.includes('vb-cable') ||
+        l.includes('cable input') ||
+        l.includes('cable output') ||
+        l.includes('vb-audio') ||
+        l.includes('voicemeeter') ||
+        l.includes('soundflower') ||
+        l.includes('loopback') ||
+        l.includes('existential') ||
+        l.includes('virtual') ||
+        l.includes('aggregate')
+      );
+    }
+
+    function isPhysicalSpeakerOrEarphoneLabel(label) {
+      const l = (label || '').toLowerCase();
+      if (isAnyVirtualOrDeprecatedInputLabel(l)) return false;
+      return (
+        l.includes('headphone') ||
+        l.includes('earphone') ||
+        l.includes('airpods') ||
+        l.includes('speaker') ||
+        l.includes('built-in') ||
+        l.includes('macbook') ||
+        l.includes('realtek') ||
+        l.includes('high definition audio') ||
+        l.includes('hdmi') ||
+        l.includes('displayport') ||
+        l.includes('bluetooth')
+      );
+    }
+
+    function pickBestPhysicalInputDevice(inputs, requestedId) {
+      const physicalInputs = inputs.filter(
+        (d) =>
+          d.kind === 'audioinput' &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isAnyVirtualOrDeprecatedInputLabel(d.label)
+      );
+      if (
+        requestedId &&
+        requestedId !== 'default' &&
+        requestedId !== 'communications'
+      ) {
+        const exactMatch = physicalInputs.find((d) => d.deviceId === requestedId);
+        if (exactMatch) return exactMatch;
+      }
+      const builtInMatch = physicalInputs.find((d) => {
+        const l = (d.label || '').toLowerCase();
+        return (
+          l.includes('macbook') ||
+          l.includes('built-in') ||
+          l.includes('internal') ||
+          l.includes('mikrofon') ||
+          l.includes('microphone')
+        );
+      });
+      return builtInMatch || physicalInputs[0] || null;
+    }
+
+    function updateThresholdUI(db) {
+      thresholdDb = Number(db);
+      preset05m.className = 'seg-btn' + (db >= -22 ? ' selected' : '');
+      preset1m.className = 'seg-btn' + (db < -22 && db >= -30 ? ' selected' : '');
+      presetStd.className = 'seg-btn' + (db < -30 ? ' selected' : '');
+      thresholdSlider.value = String(db);
+      const label = db >= -22 ? '<= 0.5m' : db >= -30 ? '<= 1.0m' : '> 1.5m';
+      dbValueText.textContent = db + ' dB (' + label + ')';
+    }
+
+    preset05m.addEventListener('click', () => updateThresholdUI(-20));
+    preset1m.addEventListener('click', () => updateThresholdUI(-26));
+    presetStd.addEventListener('click', () => updateThresholdUI(-38));
+    thresholdSlider.addEventListener('input', (e) => updateThresholdUI(Number(e.target.value)));
+
+    heroSwitchCard.addEventListener('click', () => {
+      isEnabled = !isEnabled;
+      if (isEnabled) {
+        heroSwitchCard.className = 'hero-switch-card active';
+        toggleBtn.className = 'toggle-track active';
+        statusText.textContent = 'Peredam Bising & Fokus Suara Aktif';
+        hintText.textContent = 'Otomatis menjernihkan suara HD, mengupas bising latar & memblokir obrolan > 1m';
+        document.title = 'Opung - Office Proximity Ultra Noise Gate';
+      } else {
+        heroSwitchCard.className = 'hero-switch-card';
+        toggleBtn.className = 'toggle-track';
+        statusText.textContent = 'Peredam Bising Dimatikan (Bypass)';
+        hintText.textContent = 'Semua suara sekitar masuk ke mikrofon tanpa penyaringan.';
+        document.title = 'Opung - Office Proximity Ultra Noise Gate (Bypass)';
+      }
+    });
+
+    async function routeEarphoneLoopbackToPhysicalDevice() {
+      try {
+        if (typeof earphoneLoopbackOut.setSinkId !== 'function') return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const outputs = devices.filter(
+          (d) =>
+            d.kind === 'audiooutput' &&
+            d.deviceId !== 'default' &&
+            d.deviceId !== 'communications' &&
+            !isAnyVirtualOrDeprecatedInputLabel(d.label)
+        );
+        const headphoneOut = outputs.find((d) => {
+          const l = (d.label || '').toLowerCase();
+          return (
+            l.includes('headphone') ||
+            l.includes('earphone') ||
+            l.includes('airpods') ||
+            l.includes('bluetooth')
+          );
+        });
+        const physicalOut =
+          headphoneOut ||
+          outputs.find((d) => isPhysicalSpeakerOrEarphoneLabel(d.label)) ||
+          outputs[0];
+        if (physicalOut && physicalOut.deviceId) {
+          await earphoneLoopbackOut.setSinkId(physicalOut.deviceId).catch(() => {});
+        }
+      } catch (_e) {}
+    }
+
+    loopbackBtn.addEventListener('click', async () => {
+      loopbackAudible = !loopbackAudible;
+      // PENTING: JANGAN PERNAH mematikan echoCancellation saat Tes Dengar Suara Sendiri!
+      // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
+      if (activeMakeupGainNode && audioCtx) {
+        activeMakeupGainNode.gain.setTargetAtTime(
+          loopbackAudible ? 0.85 : 1.35,
+          audioCtx.currentTime,
+          0.02
+        );
+      }
+      if (loopbackAudible) {
+        if (audioCtx && audioCtx.state === 'suspended') {
+          await audioCtx.resume().catch(() => {});
+        }
+        await routeEarphoneLoopbackToPhysicalDevice();
+        if (currentCleanStream) {
+          earphoneLoopbackOut.srcObject = currentCleanStream;
+        }
+        earphoneLoopbackOut.volume = 0.68;
+        earphoneLoopbackOut.muted = false;
+        earphoneLoopbackOut.play().catch(() => {});
+        loopbackBtn.className = 'test-btn on';
+        loopbackBtn.textContent = 'Tes Suara Sendiri: AKTIF (Klik untuk Matikan)';
+      } else {
+        earphoneLoopbackOut.muted = true;
+        earphoneLoopbackOut.volume = 0;
+        earphoneLoopbackOut.pause();
+        earphoneLoopbackOut.srcObject = null;
+        loopbackBtn.className = 'test-btn';
+        loopbackBtn.textContent = 'Tes Dengar Suara Sendiri (Gunakan Earphone)';
+      }
+    });
+
+    let appliedVirtualSinkId = '';
+
+    function getConnectedVirtualMicBadge(sinkId) {
+      const opt = Array.from(virtualOutputSelect.options || []).find((o) => o.value === sinkId);
+      const optLabel = opt ? (opt.textContent || '').toLowerCase() : '';
+      if (
+        sinkId === 'native-virtual-cable' ||
+        optLabel.includes('cable') ||
+        optLabel.includes('vb-audio') ||
+        optLabel.includes('vb-cable') ||
+        optLabel.includes('voicemeeter') ||
+        (!optLabel.includes('blackhole') && isWindowsPlatform)
+      ) {
+        return 'Terhubung ke VB-CABLE ✓';
+      }
+      return 'Terhubung ke BlackHole 2ch ✓';
+    }
+
+    async function applyOutputSink(sinkId, forceRebind) {
+      selectedVirtualSinkId = sinkId || '';
+
+      if (
+        !sinkId ||
+        sinkId === 'default' ||
+        sinkId === 'communications' ||
+        sinkId === 'coreaudio-default'
+      ) {
+        appliedVirtualSinkId = '';
+        nativeCoreAudioSinkActive = false;
+        sendNativeBridgeCommand('SINK:OFF');
+        virtualCableAudioOut.muted = true;
+        virtualCableAudioOut.volume = 0;
+        virtualCableAudioOut.pause();
+        virtualCableAudioOut.srcObject = null;
+        sinkBadge.textContent = 'Siaga (Earphone Aman)';
+        sinkBadge.style.color = '#94a3b8';
+        return;
+      }
+
+      if (audioCtx && audioCtx.state === 'suspended') {
+        await audioCtx.resume().catch(() => {});
+      }
+
+      // Jika berjalan di dalam aplikasi native macOS (WKWebView) atau Windows (WebView2), jembatan audio native langsung menulis ke BlackHole 2ch / VB-CABLE!
+      if (hasNativeCoreAudioBridge()) {
+        nativeCoreAudioSinkActive = true;
+        sendNativeBridgeCommand('SINK:ON');
+      }
+
+      try {
+        if (
+          sinkId !== 'native-blackhole-2ch' &&
+          sinkId !== 'native-virtual-cable' &&
+          typeof virtualCableAudioOut.setSinkId === 'function'
+        ) {
+          if (appliedVirtualSinkId !== sinkId || forceRebind) {
+            virtualCableAudioOut.muted = true;
+            await virtualCableAudioOut.setSinkId(sinkId);
+            appliedVirtualSinkId = sinkId;
+          }
+          if (!hasNativeCoreAudioBridge() && currentCleanStream) {
+            if (virtualCableAudioOut.srcObject !== currentCleanStream) {
+              virtualCableAudioOut.srcObject = currentCleanStream;
+            }
+            virtualCableAudioOut.volume = 1.0;
+            virtualCableAudioOut.muted = false;
+            await virtualCableAudioOut.play().catch(() => {});
+          }
+        }
+        sinkBadge.textContent = getConnectedVirtualMicBadge(sinkId);
+        sinkBadge.style.color = '#34d399';
+      } catch (err) {
+        if (nativeCoreAudioSinkActive) {
+          sinkBadge.textContent = getConnectedVirtualMicBadge(sinkId);
+          sinkBadge.style.color = '#34d399';
+        } else {
+          appliedVirtualSinkId = '';
+          virtualCableAudioOut.muted = true;
+          virtualCableAudioOut.volume = 0;
+          virtualCableAudioOut.pause();
+          virtualCableAudioOut.srcObject = null;
+          sinkBadge.textContent = 'Siaga';
+          sinkBadge.style.color = '#94a3b8';
+        }
+      }
+    }
+
+    virtualOutputSelect.addEventListener('change', (e) => {
+      applyOutputSink(e.target.value, true);
+    });
+
+    micInputSelect.addEventListener('change', (e) => {
+      startMacAudioPipeline(e.target.value);
+    });
+
+    const refreshDevsBtn = document.getElementById('refreshDevsBtn');
+    if (refreshDevsBtn) {
+      refreshDevsBtn.addEventListener('click', async () => {
+        if (audioCtx && audioCtx.state === 'suspended') {
+          await audioCtx.resume().catch(() => {});
+        }
+        sendNativeBridgeCommand('SINK:ON');
+        await populateMacAudioDevices(micInputSelect.value, '', true);
+      });
+    }
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+      navigator.mediaDevices.addEventListener('devicechange', () => {
+        populateMacAudioDevices(micInputSelect.value, '', false);
+      });
+    }
+
+    let labelRetryCount = 0;
+
+    async function populateMacAudioDevices(activeInputDeviceId, activeTrackLabel, forceRebind) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const allInputs = devices.filter((d) => d.kind === 'audioinput');
+      // Saring ketat agar BlackHole 2ch / VB-CABLE / OPUNG Microphone TIDAK PERNAH muncul di dropdown Input Fisik!
+      const physicalInputs = allInputs.filter(
+        (d) =>
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isAnyVirtualOrDeprecatedInputLabel(d.label)
+      );
+      const inputsToDisplay = physicalInputs.length > 0 ? physicalInputs : allInputs.filter((d) => !isAnyVirtualOrDeprecatedInputLabel(d.label));
+
+      // Saring output: Hilangkan OPUNG Microphone duplikat, cukup 1 virtual mic resmi (BlackHole 2ch / VB-CABLE)!
+      const outputs = devices.filter(
+        (d) =>
+          d.kind === 'audiooutput' &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isDeprecatedOpungDriverLabel(d.label)
+      );
+
+      micInputSelect.innerHTML = '';
+      inputsToDisplay.forEach((d, idx) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        const resolvedLabel =
+          d.label ||
+          (idx === 0 && activeTrackLabel && !isAnyVirtualOrDeprecatedInputLabel(activeTrackLabel)
+            ? activeTrackLabel
+            : '') ||
+          (d.deviceId && d.deviceId !== 'default'
+            ? (isWindowsPlatform ? 'Mikrofon Fisik PC (' : 'Mikrofon Fisik MacBook (') + d.deviceId.slice(0, 6) + ')'
+            : isWindowsPlatform
+            ? 'Mikrofon Internal PC'
+            : 'Mikrofon Internal MacBook');
+        opt.textContent = resolvedLabel;
+        micInputSelect.appendChild(opt);
+      });
+      if (activeInputDeviceId && inputsToDisplay.some((d) => d.deviceId === activeInputDeviceId)) {
+        micInputSelect.value = activeInputDeviceId;
+      } else if (inputsToDisplay.length > 0) {
+        micInputSelect.value = inputsToDisplay[0].deviceId;
+      }
+
+      if (
+        labelRetryCount < 4 &&
+        allInputs.length > 0 &&
+        allInputs.every((d) => !d.label || d.label.trim() === '')
+      ) {
+        labelRetryCount++;
+        setTimeout(() => {
+          startMacAudioPipeline(activeInputDeviceId);
+        }, 550);
+      }
+
+      virtualOutputSelect.innerHTML = '';
+      const emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = 'Siaga (Jangan Kirim ke Meet)';
+      virtualOutputSelect.appendChild(emptyOpt);
+
+      let virtualSinkId = null;
+      outputs.forEach((d) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        const isVirt = isVirtualCableLabel(d.label);
+        const isPhys = isPhysicalSpeakerOrEarphoneLabel(d.label);
+        if (isVirt) {
+          const dl = (d.label || '').toLowerCase();
+          const isPreferred = isWindowsPlatform
+            ? dl.includes('cable input') || dl.includes('vb-audio') || dl.includes('vb-cable')
+            : dl.includes('blackhole');
+          if (!virtualSinkId || isPreferred) {
+            virtualSinkId = d.deviceId;
+          }
+          opt.textContent = d.label + ' (Aktif untuk Google Meet / Zoom)';
+        } else if (isPhys) {
+          opt.disabled = true;
+          opt.textContent = d.label + ' (Speaker/Earphone Fisik - Diblokir)';
+        } else {
+          opt.textContent = d.label || 'Output Audio (' + (d.deviceId ? d.deviceId.slice(0, 6) : 'Default') + ')';
+        }
+        virtualOutputSelect.appendChild(opt);
+      });
+
+      // Jika di dalam WKWebView macOS atau WebView2 Windows belum mengekspos virtual output atau pakai native bridge:
+      if (!virtualSinkId && hasNativeCoreAudioBridge()) {
+        const nativeOpt = document.createElement('option');
+        if (isWindowsPlatform) {
+          nativeOpt.value = 'native-virtual-cable';
+          nativeOpt.textContent = 'CABLE Input (VB-CABLE) (Aktif untuk Google Meet / Zoom)';
+          virtualSinkId = 'native-virtual-cable';
+        } else {
+          nativeOpt.value = 'native-blackhole-2ch';
+          nativeOpt.textContent = 'BlackHole 2ch (Aktif untuk Google Meet / Zoom)';
+          virtualSinkId = 'native-blackhole-2ch';
+        }
+        virtualOutputSelect.appendChild(nativeOpt);
+      }
+
+      const targetSink =
+        (selectedVirtualSinkId &&
+          Array.from(virtualOutputSelect.options).some((o) => o.value === selectedVirtualSinkId && !o.disabled)
+          ? selectedVirtualSinkId
+          : null) || virtualSinkId;
+
+      if (targetSink) {
+        virtualOutputSelect.value = targetSink;
+        await applyOutputSink(targetSink, !!forceRebind);
+      } else {
+        virtualOutputSelect.value = '';
+        await applyOutputSink('', true);
+      }
+    }
+
+    async function startMacAudioPipeline(selectedInputId) {
+      try {
+        if (currentMicStream) {
+          currentMicStream.getTracks().forEach((t) => t.stop());
+        }
+        if (audioCtx && audioCtx.state !== 'closed') {
+          await audioCtx.close().catch(() => {});
+        }
+
+        // 1. Cek daftar perangkat sebelum getUserMedia agar tidak pernah membuka 'default' jika 'default' adalah BlackHole 2ch!
+        let targetInputId = selectedInputId;
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+          const preDevs = await navigator.mediaDevices.enumerateDevices();
+          const bestPreMic = pickBestPhysicalInputDevice(preDevs, targetInputId);
+          if (bestPreMic && bestPreMic.deviceId) {
+            targetInputId = bestPreMic.deviceId;
+          }
+        }
+
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId:
+                targetInputId && targetInputId !== 'default' && targetInputId !== 'communications'
+                  ? { exact: targetInputId }
+                  : undefined,
+              sampleRate: { ideal: 48000 },
+              channelCount: { ideal: 1 },
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: false,
+            },
+          });
+        } catch (_firstErr) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: false,
+            },
+          });
+        }
+
+        // 2. Setelah izin mikrofon terbuka, pastikan 100% kita membaca dari Mikrofon Fisik MacBook (BUKAN BlackHole 2ch / Default)!
+        let firstTrack = stream.getAudioTracks()[0];
+        const allDevsAfter = await navigator.mediaDevices.enumerateDevices();
+        const bestPhysicalMic = pickBestPhysicalInputDevice(allDevsAfter, targetInputId);
+        const currentTrackDeviceId =
+          firstTrack && typeof firstTrack.getSettings === 'function'
+            ? firstTrack.getSettings().deviceId
+            : '';
+        const isCurrentTrackVirtual =
+          firstTrack && firstTrack.label && isAnyVirtualOrDeprecatedInputLabel(firstTrack.label);
+
+        if (
+          bestPhysicalMic &&
+          (isCurrentTrackVirtual ||
+            !targetInputId ||
+            targetInputId === 'default' ||
+            (currentTrackDeviceId && currentTrackDeviceId !== bestPhysicalMic.deviceId && !selectedInputId))
+        ) {
+          try {
+            const exactStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                deviceId: { exact: bestPhysicalMic.deviceId },
+                sampleRate: { ideal: 48000 },
+                channelCount: { ideal: 1 },
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: false,
+              },
+            });
+            stream.getTracks().forEach((t) => t.stop());
+            stream = exactStream;
+            targetInputId = bestPhysicalMic.deviceId;
+            firstTrack = stream.getAudioTracks()[0];
+          } catch (_switchErr) {}
+        }
+
+        currentMicStream = stream;
+        const activeTrackLabel = firstTrack && firstTrack.label ? firstTrack.label : '';
+        const activeSettingsId =
+          firstTrack && typeof firstTrack.getSettings === 'function'
+            ? firstTrack.getSettings().deviceId
+            : '';
+
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume().catch(() => {});
+        }
+        const sourceNode = audioCtx.createMediaStreamSource(stream);
+        window.__opungSourceNode = sourceNode;
+
+        rawAnalyser = audioCtx.createAnalyser();
+        rawAnalyser.fftSize = 128;
+        rawAnalyser.smoothingTimeConstant = 0.65;
+
+        cleanAnalyser = audioCtx.createAnalyser();
+        cleanAnalyser.fftSize = 128;
+        cleanAnalyser.smoothingTimeConstant = 0.65;
+
+        const hardGateGain = audioCtx.createGain();
+        hardGateGain.gain.value = 1.0;
+
+        // OTOMATIS AKTIF: 5-Stage Studio HD Vocal Clarity Equalizer + Krisp Vocal Mask
+        const subCutNode = audioCtx.createBiquadFilter();
+        subCutNode.type = 'highpass';
+        subCutNode.frequency.value = 85;
+        subCutNode.Q.value = 0.707;
+
+        const krispLowPassNode = audioCtx.createBiquadFilter();
+        krispLowPassNode.type = 'lowpass';
+        krispLowPassNode.frequency.value = 4600;
+        krispLowPassNode.Q.value = 0.707;
+
+        const mudCutNode = audioCtx.createBiquadFilter();
+        mudCutNode.type = 'peaking';
+        mudCutNode.frequency.value = 260;
+        mudCutNode.Q.value = 1.4;
+        mudCutNode.gain.value = -2.8;
+
+        const warmthNode = audioCtx.createBiquadFilter();
+        warmthNode.type = 'peaking';
+        warmthNode.frequency.value = 135;
+        warmthNode.Q.value = 1.1;
+        warmthNode.gain.value = 2.0;
+
+        const presenceNode = audioCtx.createBiquadFilter();
+        presenceNode.type = 'peaking';
+        presenceNode.frequency.value = 3500;
+        presenceNode.Q.value = 1.0;
+        presenceNode.gain.value = 4.5;
+
+        const airShelfNode = audioCtx.createBiquadFilter();
+        airShelfNode.type = 'highshelf';
+        airShelfNode.frequency.value = 6500;
+        airShelfNode.gain.value = 3.5;
+
+        const studioCompressor = audioCtx.createDynamicsCompressor();
+        studioCompressor.threshold.value = -20;
+        studioCompressor.knee.value = 12;
+        studioCompressor.ratio.value = 2.5;
+        studioCompressor.attack.value = 0.004;
+        studioCompressor.release.value = 0.15;
+
+        const makeupGainNode = audioCtx.createGain();
+        makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.65;
+        activeMakeupGainNode = makeupGainNode;
+
+        const processorNode = audioCtx.createScriptProcessor(512, 1, 1);
+        window.__opungProcessorNode = processorNode;
+        dspCore = new NearFieldRNNoiseDspCore();
+
+        const pcm16Scratch = new Int16Array(512);
+        const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
+
+        processorNode.onaudioprocess = (ev) => {
+          const inBuf = ev.inputBuffer.getChannelData(0);
+          const outBuf = ev.outputBuffer.getChannelData(0);
+          dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
+          const isMutedByGate = isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0;
+          hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
+
+          // Kirim langsung dari processorNode utama (yang dijamin selalu ditarik oleh cleanAnalyser) ke jembatan CoreAudio HAL BlackHole 2ch!
+          if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
+            const vocalBoost = loopbackAudible ? 1.15 : 1.85;
+            for (let i = 0; i < outBuf.length; i++) {
+              const rawSample = isMutedByGate ? 0.0 : outBuf[i] * vocalBoost;
+              const clipped = Math.tanh(rawSample);
+              pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
+            }
+            let bin = '';
+            for (let j = 0; j < uint8Scratch.length; j++) {
+              bin += String.fromCharCode(uint8Scratch[j]);
+            }
+            sendNativeBridgeCommand(btoa(bin));
+          }
+        };
+
+        const cleanDest = audioCtx.createMediaStreamDestination();
+        try {
+          cleanDest.channelCount = 2;
+          cleanDest.channelCountMode = 'explicit';
+          cleanDest.channelInterpretation = 'speakers';
+        } catch (_e) {}
+
+        // Sub-audible Pilot (-96 dBFS @ 20Hz) agar Chrome/WebKit tidak pernah menidurkan stream BlackHole 2ch:
+        const pilotOsc = audioCtx.createOscillator();
+        pilotOsc.type = 'sine';
+        pilotOsc.frequency.value = 20;
+        const pilotGain = audioCtx.createGain();
+        pilotGain.gain.value = 0.000015;
+        pilotOsc.connect(pilotGain);
+        pilotGain.connect(cleanDest);
+        pilotOsc.start();
+
+        const keepAliveGain = audioCtx.createGain();
+        keepAliveGain.gain.value = 0.0;
+
+        sourceNode.connect(rawAnalyser);
+        rawAnalyser.connect(processorNode);
+        processorNode.connect(subCutNode);
+        subCutNode.connect(krispLowPassNode);
+        krispLowPassNode.connect(mudCutNode);
+        mudCutNode.connect(warmthNode);
+        warmthNode.connect(presenceNode);
+        presenceNode.connect(airShelfNode);
+        airShelfNode.connect(studioCompressor);
+        studioCompressor.connect(makeupGainNode);
+        makeupGainNode.connect(hardGateGain);
+        hardGateGain.connect(cleanAnalyser);
+        cleanAnalyser.connect(cleanDest);
+        cleanAnalyser.connect(keepAliveGain);
+        keepAliveGain.connect(audioCtx.destination);
+
+        currentCleanStream = cleanDest.stream;
+
+        if (loopbackAudible) {
+          await routeEarphoneLoopbackToPhysicalDevice();
+          earphoneLoopbackOut.srcObject = currentCleanStream;
+          earphoneLoopbackOut.volume = 0.68;
+          earphoneLoopbackOut.muted = false;
+          await earphoneLoopbackOut.play().catch(() => {});
+        } else {
+          earphoneLoopbackOut.muted = true;
+          earphoneLoopbackOut.volume = 0;
+          earphoneLoopbackOut.pause();
+          earphoneLoopbackOut.srcObject = null;
+        }
+
+        document.getElementById('engineStatus').textContent = 'Office Proximity Ultra Noise Gate';
+        await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
+      } catch (err) {
+        document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
+        setTimeout(() => {
+          startMacAudioPipeline(selectedInputId);
+        }, 1200);
+      }
+    }
+
+    ['pointerdown', 'keydown', 'mousemove', 'touchstart'].forEach((evName) => {
+      window.addEventListener(
+        evName,
+        () => {
+          if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+          }
+          if (
+            !hasNativeCoreAudioBridge() &&
+            selectedVirtualSinkId &&
+            virtualCableAudioOut.srcObject &&
+            virtualCableAudioOut.paused
+          ) {
+            virtualCableAudioOut.play().catch(() => {});
+          }
+        },
+        { passive: true }
+      );
+    });
+
+    const rawFreq = new Uint8Array(64);
+    const cleanFreq = new Uint8Array(64);
+
+    function renderSpectrum() {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      if (
+        !hasNativeCoreAudioBridge() &&
+        selectedVirtualSinkId &&
+        selectedVirtualSinkId !== 'native-blackhole-2ch' &&
+        virtualCableAudioOut.srcObject &&
+        !virtualCableAudioOut.muted &&
+        virtualCableAudioOut.paused
+      ) {
+        virtualCableAudioOut.play().catch(() => {});
+      }
+
+      const normalizedThresh = Math.max(0.15, Math.min(0.88, (thresholdDb + 50) / 38));
+      const thresholdY = h - normalizedThresh * (h - 10);
+
+      if (rawAnalyser && cleanAnalyser) {
+        rawAnalyser.getByteFrequencyData(rawFreq);
+        cleanAnalyser.getByteFrequencyData(cleanFreq);
+
+        const barCount = 28;
+        const barWidth = w / barCount;
+        let rSum = 0;
+        let cSum = 0;
+
+        for (let i = 0; i < barCount; i++) {
+          const rVal = rawFreq[i];
+          const cVal = cleanFreq[i];
+          rSum += rVal;
+          cSum += cVal;
+
+          const rH = (rVal / 255) * (h - 8);
+          const cH = (cVal / 255) * (h - 8);
+
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.35)';
+          ctx.fillRect(i * barWidth + 1, h - rH, barWidth - 2, rH);
+
+          ctx.fillStyle = isEnabled ? '#38bdf8' : '#94a3b8';
+          ctx.fillRect(i * barWidth + 2.5, h - cH, barWidth - 5, cH);
+        }
+
+        rawPctEl.textContent = Math.round((rSum / (barCount * 255)) * 100) + '%';
+        cleanPctEl.textContent = Math.round((cSum / (barCount * 255)) * 100) + '%';
+        gainLabel.textContent = 'Gain: ' + dspCore.smoothedGain.toFixed(2) + 'x';
+
+        if (!isEnabled) {
+          gateStatusBadge.style.color = '#94a3b8';
+          gateStatusBadge.textContent = 'Bypass · 1.00x';
+        } else if (dspCore.isGateOpen) {
+          gateStatusBadge.style.color = '#34d399';
+          gateStatusBadge.textContent = 'Suara Jernih · ' + dspCore.smoothedGain.toFixed(2) + 'x';
+        } else {
+          gateStatusBadge.style.color = '#38bdf8';
+          gateStatusBadge.textContent = 'Bising Dibungkam · 0.00x';
+        }
+      }
+
+      if (isEnabled) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, thresholdY);
+        ctx.lineTo(w, thresholdY);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      requestAnimationFrame(renderSpectrum);
+    }
+
+    startMacAudioPipeline();
+    requestAnimationFrame(renderSpectrum);
+  </script>
+</body>
+</html>

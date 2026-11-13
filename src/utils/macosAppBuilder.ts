@@ -631,7 +631,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let selectedVirtualSinkId = '';
     let nativeCoreAudioSinkActive = false;
 
-    function hasNativeCoreAudioBridge() {
+    const isWindowsPlatform = /windows|win32|win64/i.test(navigator.userAgent || '');
+
+    function hasWebKitAudioBridge() {
       return Boolean(
         window.webkit &&
         window.webkit.messageHandlers &&
@@ -639,12 +641,43 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       );
     }
 
+    function hasWebView2AudioBridge() {
+      return Boolean(
+        window.chrome &&
+        window.chrome.webview &&
+        typeof window.chrome.webview.postMessage === 'function'
+      );
+    }
+
+    function hasNativeCoreAudioBridge() {
+      return hasWebKitAudioBridge() || hasWebView2AudioBridge();
+    }
+
     function sendNativeBridgeCommand(cmd) {
-      if (hasNativeCoreAudioBridge()) {
+      if (hasWebKitAudioBridge()) {
         try {
           window.webkit.messageHandlers.opungAudioBridge.postMessage(cmd);
         } catch (_e) {}
+      } else if (hasWebView2AudioBridge()) {
+        try {
+          window.chrome.webview.postMessage(cmd);
+        } catch (_e) {}
       }
+    }
+
+    if (hasWebView2AudioBridge() && typeof window.chrome.webview.addEventListener === 'function') {
+      window.chrome.webview.addEventListener('message', (event) => {
+        const msg = typeof event.data === 'string' ? event.data : '';
+        if (msg === 'VBCABLE_MISSING') {
+          nativeCoreAudioSinkActive = false;
+          sinkBadge.textContent = 'VB-CABLE Belum Terpasang';
+          sinkBadge.style.color = '#fbbf24';
+        } else if (msg === 'VBCABLE_READY') {
+          nativeCoreAudioSinkActive = true;
+          sinkBadge.textContent = 'Terhubung ke VB-CABLE ✓';
+          sinkBadge.style.color = '#34d399';
+        }
+      });
     }
 
     function fitNativeWindowHeight() {
@@ -670,6 +703,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       return (
         l.includes('blackhole') ||
         l.includes('vb-cable') ||
+        l.includes('cable input') ||
+        l.includes('cable output') ||
+        l.includes('vb-audio') ||
+        l.includes('voicemeeter') ||
         l.includes('soundflower') ||
         l.includes('loopback') ||
         l.includes('existential') ||
@@ -683,6 +720,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         l.includes('opung') ||
         l.includes('blackhole') ||
         l.includes('vb-cable') ||
+        l.includes('cable input') ||
+        l.includes('cable output') ||
+        l.includes('vb-audio') ||
+        l.includes('voicemeeter') ||
         l.includes('soundflower') ||
         l.includes('loopback') ||
         l.includes('existential') ||
@@ -701,6 +742,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         l.includes('speaker') ||
         l.includes('built-in') ||
         l.includes('macbook') ||
+        l.includes('realtek') ||
+        l.includes('high definition audio') ||
         l.includes('hdmi') ||
         l.includes('displayport') ||
         l.includes('bluetooth')
@@ -834,6 +877,22 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     let appliedVirtualSinkId = '';
 
+    function getConnectedVirtualMicBadge(sinkId) {
+      const opt = Array.from(virtualOutputSelect.options || []).find((o) => o.value === sinkId);
+      const optLabel = opt ? (opt.textContent || '').toLowerCase() : '';
+      if (
+        sinkId === 'native-virtual-cable' ||
+        optLabel.includes('cable') ||
+        optLabel.includes('vb-audio') ||
+        optLabel.includes('vb-cable') ||
+        optLabel.includes('voicemeeter') ||
+        (!optLabel.includes('blackhole') && isWindowsPlatform)
+      ) {
+        return 'Terhubung ke VB-CABLE ✓';
+      }
+      return 'Terhubung ke BlackHole 2ch ✓';
+    }
+
     async function applyOutputSink(sinkId, forceRebind) {
       selectedVirtualSinkId = sinkId || '';
 
@@ -859,7 +918,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         await audioCtx.resume().catch(() => {});
       }
 
-      // Jika berjalan di dalam aplikasi native OPUNG.app, jembatan CoreAudio HAL langsung menulis ke BlackHole 2ch!
+      // Jika berjalan di dalam aplikasi native macOS (WKWebView) atau Windows (WebView2), jembatan audio native langsung menulis ke BlackHole 2ch / VB-CABLE!
       if (hasNativeCoreAudioBridge()) {
         nativeCoreAudioSinkActive = true;
         sendNativeBridgeCommand('SINK:ON');
@@ -868,6 +927,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       try {
         if (
           sinkId !== 'native-blackhole-2ch' &&
+          sinkId !== 'native-virtual-cable' &&
           typeof virtualCableAudioOut.setSinkId === 'function'
         ) {
           if (appliedVirtualSinkId !== sinkId || forceRebind) {
@@ -884,11 +944,11 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
             await virtualCableAudioOut.play().catch(() => {});
           }
         }
-        sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
+        sinkBadge.textContent = getConnectedVirtualMicBadge(sinkId);
         sinkBadge.style.color = '#34d399';
       } catch (err) {
         if (nativeCoreAudioSinkActive) {
-          sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
+          sinkBadge.textContent = getConnectedVirtualMicBadge(sinkId);
           sinkBadge.style.color = '#34d399';
         } else {
           appliedVirtualSinkId = '';
@@ -931,7 +991,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     async function populateMacAudioDevices(activeInputDeviceId, activeTrackLabel, forceRebind) {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const allInputs = devices.filter((d) => d.kind === 'audioinput');
-      // Saring ketat agar BlackHole 2ch / OPUNG Microphone TIDAK PERNAH muncul di dropdown Input Fisik!
+      // Saring ketat agar BlackHole 2ch / VB-CABLE / OPUNG Microphone TIDAK PERNAH muncul di dropdown Input Fisik!
       const physicalInputs = allInputs.filter(
         (d) =>
           d.deviceId !== 'default' &&
@@ -940,7 +1000,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       );
       const inputsToDisplay = physicalInputs.length > 0 ? physicalInputs : allInputs.filter((d) => !isAnyVirtualOrDeprecatedInputLabel(d.label));
 
-      // Saring output: Hilangkan OPUNG Microphone duplikat, cukup 1 virtual mic resmi yaitu BlackHole 2ch!
+      // Saring output: Hilangkan OPUNG Microphone duplikat, cukup 1 virtual mic resmi (BlackHole 2ch / VB-CABLE)!
       const outputs = devices.filter(
         (d) =>
           d.kind === 'audiooutput' &&
@@ -959,7 +1019,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
             ? activeTrackLabel
             : '') ||
           (d.deviceId && d.deviceId !== 'default'
-            ? 'Mikrofon Fisik MacBook (' + d.deviceId.slice(0, 6) + ')'
+            ? (isWindowsPlatform ? 'Mikrofon Fisik PC (' : 'Mikrofon Fisik MacBook (') + d.deviceId.slice(0, 6) + ')'
+            : isWindowsPlatform
+            ? 'Mikrofon Internal PC'
             : 'Mikrofon Internal MacBook');
         opt.textContent = resolvedLabel;
         micInputSelect.appendChild(opt);
@@ -987,15 +1049,19 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       emptyOpt.textContent = 'Siaga (Jangan Kirim ke Meet)';
       virtualOutputSelect.appendChild(emptyOpt);
 
-      let blackHoleSinkId = null;
+      let virtualSinkId = null;
       outputs.forEach((d) => {
         const opt = document.createElement('option');
         opt.value = d.deviceId;
         const isVirt = isVirtualCableLabel(d.label);
         const isPhys = isPhysicalSpeakerOrEarphoneLabel(d.label);
         if (isVirt) {
-          if (!blackHoleSinkId || (d.label && d.label.toLowerCase().includes('blackhole'))) {
-            blackHoleSinkId = d.deviceId;
+          const dl = (d.label || '').toLowerCase();
+          const isPreferred = isWindowsPlatform
+            ? dl.includes('cable input') || dl.includes('vb-audio') || dl.includes('vb-cable')
+            : dl.includes('blackhole');
+          if (!virtualSinkId || isPreferred) {
+            virtualSinkId = d.deviceId;
           }
           opt.textContent = d.label + ' (Aktif untuk Google Meet / Zoom)';
         } else if (isPhys) {
@@ -1007,20 +1073,26 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         virtualOutputSelect.appendChild(opt);
       });
 
-      // Jika di dalam WKWebView macOS belum mengekspos daftar audiooutput tetapi jembatan CoreAudio melihat BlackHole 2ch:
-      if (!blackHoleSinkId && hasNativeCoreAudioBridge()) {
+      // Jika di dalam WKWebView macOS atau WebView2 Windows belum mengekspos virtual output atau pakai native bridge:
+      if (!virtualSinkId && hasNativeCoreAudioBridge()) {
         const nativeOpt = document.createElement('option');
-        nativeOpt.value = 'native-blackhole-2ch';
-        nativeOpt.textContent = 'BlackHole 2ch (Aktif untuk Google Meet / Zoom)';
+        if (isWindowsPlatform) {
+          nativeOpt.value = 'native-virtual-cable';
+          nativeOpt.textContent = 'CABLE Input (VB-CABLE) (Aktif untuk Google Meet / Zoom)';
+          virtualSinkId = 'native-virtual-cable';
+        } else {
+          nativeOpt.value = 'native-blackhole-2ch';
+          nativeOpt.textContent = 'BlackHole 2ch (Aktif untuk Google Meet / Zoom)';
+          virtualSinkId = 'native-blackhole-2ch';
+        }
         virtualOutputSelect.appendChild(nativeOpt);
-        blackHoleSinkId = 'native-blackhole-2ch';
       }
 
       const targetSink =
         (selectedVirtualSinkId &&
           Array.from(virtualOutputSelect.options).some((o) => o.value === selectedVirtualSinkId && !o.disabled)
           ? selectedVirtualSinkId
-          : null) || blackHoleSinkId;
+          : null) || virtualSinkId;
 
       if (targetSink) {
         virtualOutputSelect.value = targetSink;
@@ -2457,13 +2529,13 @@ function computeCrc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-interface ZipEntryInput {
+export interface ZipEntryInput {
   path: string;
   data: Uint8Array;
   unixMode: number;
 }
 
-function createUnixZipArchive(entries: ZipEntryInput[]): ArrayBuffer {
+export function createUnixZipArchive(entries: ZipEntryInput[]): ArrayBuffer {
   const encoder = new TextEncoder();
   const localHeadersAndData: Uint8Array[] = [];
   const centralDirectoryHeaders: Uint8Array[] = [];
@@ -2583,15 +2655,9 @@ export const MACOS_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 
 let cachedOpungIcnsBytes: Uint8Array | null = null;
 
-/**
- * Menghasilkan file ikon resmi macOS Apple Icon Image (`AppIcon.icns`) murni di memori:
- * - Desain Ikon Option 1 (Kubah Akustik Putih "O" + 5 Bar Equalizer Vokal Electric Cyan di atas Squircle Midnight Sapphire)
- * - Berisi chunk 'ic08' (256x256 Retina PNG) dan 'ic07' (128x128 PNG) sesuai spesifikasi Apple ICNS.
- */
-export function buildOpungAppIconIcns(): Uint8Array {
-  if (cachedOpungIcnsBytes) {
-    return cachedOpungIcnsBytes;
-  }
+export function renderOpungIconPng(size: number): Uint8Array {
+  const width = size;
+  const height = size;
 
   function clampVal(v: number, min: number, max: number): number {
     return v < min ? min : v > max ? max : v;
@@ -2622,158 +2688,167 @@ export function buildOpungAppIconIcns(): Uint8Array {
     { cx: 0.205, halfH: 0.055 },
   ];
 
-  function renderIconPng(width: number, height: number): Uint8Array {
-    const rawData = new Uint8Array(height * (1 + width * 4));
-    const aa = 2.2 / width;
+  const rawData = new Uint8Array(height * (1 + width * 4));
+  const aa = 2.2 / width;
 
-    for (let y = 0; y < height; y++) {
-      const rowStart = y * (1 + width * 4);
-      rawData[rowStart] = 0; // PNG Filter 0
-      const ny = ((y + 0.5) / height) * 2 - 1;
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * (1 + width * 4);
+    rawData[rowStart] = 0; // PNG Filter 0
+    const ny = ((y + 0.5) / height) * 2 - 1;
 
-      for (let x = 0; x < width; x++) {
-        const nx = ((x + 0.5) / width) * 2 - 1;
-        const idx = rowStart + 1 + x * 4;
+    for (let x = 0; x < width; x++) {
+      const nx = ((x + 0.5) / width) * 2 - 1;
+      const idx = rowStart + 1 + x * 4;
 
-        const dBox = sdRoundedBox(nx, ny, 0.86, 0.86, 0.39);
-        if (dBox > aa * 2) {
-          continue;
-        }
-        const bgAlpha = 1 - smoothstepVal(-aa, aa, dBox);
-
-        const diag = clampVal((nx * 0.4 + ny * 0.7 + 1) * 0.5, 0, 1);
-        const distCenter = Math.hypot(nx, ny);
-        const centerGlow = Math.exp(-distCenter * distCenter * 4.2);
-
-        let r = 15 * (1 - diag) + 6 * diag + centerGlow * 12;
-        let g = 27 * (1 - diag) + 11 * diag + centerGlow * 38;
-        let b = 52 * (1 - diag) + 23 * diag + centerGlow * 68;
-
-        const rimDist = Math.abs(dBox + 0.015);
-        const rimFactor =
-          (1 - smoothstepVal(0, 0.025, rimDist)) * clampVal(1 - (nx + ny) * 0.4, 0.15, 1);
-        r = r * (1 - rimFactor * 0.35) + 56 * rimFactor * 0.35;
-        g = g * (1 - rimFactor * 0.35) + 189 * rimFactor * 0.35;
-        b = b * (1 - rimFactor * 0.35) + 248 * rimFactor * 0.35;
-
-        const dRing = Math.abs(distCenter - 0.555) - 0.132;
-
-        let dBars = 999;
-        for (let bi = 0; bi < bars.length; bi++) {
-          const db = sdVerticalCapsule(nx, ny, bars[bi].cx, bars[bi].halfH, 0.027);
-          if (db < dBars) dBars = db;
-        }
-
-        if (dBars > 0 && dBars < 0.14) {
-          const glow = Math.exp(-dBars * 24) * 0.42;
-          r += 14 * glow;
-          g += 165 * glow;
-          b += 233 * glow;
-        }
-
-        const ringMask = 1 - smoothstepVal(-aa, aa, dRing);
-        if (ringMask > 0) {
-          const vt = clampVal((ny + 0.68) / 1.36, 0, 1);
-          const ringR = 255 * (1 - vt) + 218 * vt;
-          const ringG = 255 * (1 - vt) + 240 * vt;
-          const ringB = 255;
-          r = r * (1 - ringMask) + ringR * ringMask;
-          g = g * (1 - ringMask) + ringG * ringMask;
-          b = b * (1 - ringMask) + ringB * ringMask;
-        }
-
-        const barMask = 1 - smoothstepVal(-aa, aa, dBars);
-        if (barMask > 0) {
-          const bt = clampVal((ny + 0.22) / 0.44, 0, 1);
-          const barR = 115 * (1 - bt) + 14 * bt;
-          const barG = 240 * (1 - bt) + 165 * bt;
-          const barB = 255 * (1 - bt) + 245 * bt;
-          r = r * (1 - barMask) + barR * barMask;
-          g = g * (1 - barMask) + barG * barMask;
-          b = b * (1 - barMask) + barB * barMask;
-        }
-
-        rawData[idx] = Math.round(clampVal(r, 0, 255));
-        rawData[idx + 1] = Math.round(clampVal(g, 0, 255));
-        rawData[idx + 2] = Math.round(clampVal(b, 0, 255));
-        rawData[idx + 3] = Math.round(clampVal(bgAlpha * 255, 0, 255));
+      const dBox = sdRoundedBox(nx, ny, 0.86, 0.86, 0.39);
+      if (dBox > aa * 2) {
+        continue;
       }
-    }
+      const bgAlpha = 1 - smoothstepVal(-aa, aa, dBox);
 
-    // Bungkus rawData ke dalam stream Zlib Uncompressed (RFC 1950 / RFC 1951)
-    const maxBlock = 65535;
-    const numBlocks = Math.ceil(rawData.length / maxBlock) || 1;
-    const idatData = new Uint8Array(2 + numBlocks * 5 + rawData.length + 4);
-    idatData[0] = 0x78;
-    idatData[1] = 0x01;
-    let pos = 2;
-    let offset = 0;
-    for (let blk = 0; blk < numBlocks; blk++) {
-      const isLast = blk === numBlocks - 1;
-      const len = Math.min(maxBlock, rawData.length - offset);
-      const nlen = ~len & 0xffff;
-      idatData[pos++] = isLast ? 1 : 0;
-      idatData[pos++] = len & 0xff;
-      idatData[pos++] = (len >> 8) & 0xff;
-      idatData[pos++] = nlen & 0xff;
-      idatData[pos++] = (nlen >> 8) & 0xff;
-      idatData.set(rawData.subarray(offset, offset + len), pos);
-      pos += len;
-      offset += len;
-    }
-    let s1 = 1;
-    let s2 = 0;
-    for (let i = 0; i < rawData.length; i++) {
-      s1 = (s1 + rawData[i]) % 65521;
-      s2 = (s2 + s1) % 65521;
-    }
-    const adler = ((s2 << 16) | s1) >>> 0;
-    idatData[pos++] = (adler >>> 24) & 0xff;
-    idatData[pos++] = (adler >>> 16) & 0xff;
-    idatData[pos++] = (adler >>> 8) & 0xff;
-    idatData[pos++] = adler & 0xff;
+      const diag = clampVal((nx * 0.4 + ny * 0.7 + 1) * 0.5, 0, 1);
+      const distCenter = Math.hypot(nx, ny);
+      const centerGlow = Math.exp(-distCenter * distCenter * 4.2);
 
-    function encodePngChunk(typeStr: string, chunkData: Uint8Array): Uint8Array {
-      const chunk = new Uint8Array(12 + chunkData.length);
-      const dv = new DataView(chunk.buffer);
-      dv.setUint32(0, chunkData.length, false);
-      for (let i = 0; i < 4; i++) {
-        chunk[4 + i] = typeStr.charCodeAt(i);
+      let r = 15 * (1 - diag) + 6 * diag + centerGlow * 12;
+      let g = 27 * (1 - diag) + 11 * diag + centerGlow * 38;
+      let b = 52 * (1 - diag) + 23 * diag + centerGlow * 68;
+
+      const rimDist = Math.abs(dBox + 0.015);
+      const rimFactor =
+        (1 - smoothstepVal(0, 0.025, rimDist)) * clampVal(1 - (nx + ny) * 0.4, 0.15, 1);
+      r = r * (1 - rimFactor * 0.35) + 56 * rimFactor * 0.35;
+      g = g * (1 - rimFactor * 0.35) + 189 * rimFactor * 0.35;
+      b = b * (1 - rimFactor * 0.35) + 248 * rimFactor * 0.35;
+
+      const dRing = Math.abs(distCenter - 0.555) - 0.132;
+
+      let dBars = 999;
+      for (let bi = 0; bi < bars.length; bi++) {
+        const db = sdVerticalCapsule(nx, ny, bars[bi].cx, bars[bi].halfH, 0.027);
+        if (db < dBars) dBars = db;
       }
-      chunk.set(chunkData, 8);
-      const crc = computeCrc32(chunk.subarray(4, 8 + chunkData.length));
-      dv.setUint32(8 + chunkData.length, crc, false);
-      return chunk;
+
+      if (dBars > 0 && dBars < 0.14) {
+        const glow = Math.exp(-dBars * 24) * 0.42;
+        r += 14 * glow;
+        g += 165 * glow;
+        b += 233 * glow;
+      }
+
+      const ringMask = 1 - smoothstepVal(-aa, aa, dRing);
+      if (ringMask > 0) {
+        const vt = clampVal((ny + 0.68) / 1.36, 0, 1);
+        const ringR = 255 * (1 - vt) + 218 * vt;
+        const ringG = 255 * (1 - vt) + 240 * vt;
+        const ringB = 255;
+        r = r * (1 - ringMask) + ringR * ringMask;
+        g = g * (1 - ringMask) + ringG * ringMask;
+        b = b * (1 - ringMask) + ringB * ringMask;
+      }
+
+      const barMask = 1 - smoothstepVal(-aa, aa, dBars);
+      if (barMask > 0) {
+        const bt = clampVal((ny + 0.22) / 0.44, 0, 1);
+        const barR = 115 * (1 - bt) + 14 * bt;
+        const barG = 240 * (1 - bt) + 165 * bt;
+        const barB = 255 * (1 - bt) + 245 * bt;
+        r = r * (1 - barMask) + barR * barMask;
+        g = g * (1 - barMask) + barG * barMask;
+        b = b * (1 - barMask) + barB * barMask;
+      }
+
+      rawData[idx] = Math.round(clampVal(r, 0, 255));
+      rawData[idx + 1] = Math.round(clampVal(g, 0, 255));
+      rawData[idx + 2] = Math.round(clampVal(b, 0, 255));
+      rawData[idx + 3] = Math.round(clampVal(bgAlpha * 255, 0, 255));
     }
-
-    const ihdr = new Uint8Array(13);
-    const ihdrDv = new DataView(ihdr.buffer);
-    ihdrDv.setUint32(0, width, false);
-    ihdrDv.setUint32(4, height, false);
-    ihdr[8] = 8; // 8-bit depth
-    ihdr[9] = 6; // RGBA color type
-
-    const pngSig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-    const ihdrChunk = encodePngChunk('IHDR', ihdr);
-    const idatChunk = encodePngChunk('IDAT', idatData);
-    const iendChunk = encodePngChunk('IEND', new Uint8Array(0));
-
-    const pngOut = new Uint8Array(
-      pngSig.length + ihdrChunk.length + idatChunk.length + iendChunk.length
-    );
-    let p = 0;
-    pngOut.set(pngSig, p);
-    p += pngSig.length;
-    pngOut.set(ihdrChunk, p);
-    p += ihdrChunk.length;
-    pngOut.set(idatChunk, p);
-    p += idatChunk.length;
-    pngOut.set(iendChunk, p);
-    return pngOut;
   }
 
-  const png128 = renderIconPng(128, 128);
-  const png256 = renderIconPng(256, 256);
+  // Bungkus rawData ke dalam stream Zlib Uncompressed (RFC 1950 / RFC 1951)
+  const maxBlock = 65535;
+  const numBlocks = Math.ceil(rawData.length / maxBlock) || 1;
+  const idatData = new Uint8Array(2 + numBlocks * 5 + rawData.length + 4);
+  idatData[0] = 0x78;
+  idatData[1] = 0x01;
+  let pos = 2;
+  let offset = 0;
+  for (let blk = 0; blk < numBlocks; blk++) {
+    const isLast = blk === numBlocks - 1;
+    const len = Math.min(maxBlock, rawData.length - offset);
+    const nlen = ~len & 0xffff;
+    idatData[pos++] = isLast ? 1 : 0;
+    idatData[pos++] = len & 0xff;
+    idatData[pos++] = (len >> 8) & 0xff;
+    idatData[pos++] = nlen & 0xff;
+    idatData[pos++] = (nlen >> 8) & 0xff;
+    idatData.set(rawData.subarray(offset, offset + len), pos);
+    pos += len;
+    offset += len;
+  }
+  let s1 = 1;
+  let s2 = 0;
+  for (let i = 0; i < rawData.length; i++) {
+    s1 = (s1 + rawData[i]) % 65521;
+    s2 = (s2 + s1) % 65521;
+  }
+  const adler = ((s2 << 16) | s1) >>> 0;
+  idatData[pos++] = (adler >>> 24) & 0xff;
+  idatData[pos++] = (adler >>> 16) & 0xff;
+  idatData[pos++] = (adler >>> 8) & 0xff;
+  idatData[pos++] = adler & 0xff;
+
+  function encodePngChunk(typeStr: string, chunkData: Uint8Array): Uint8Array {
+    const chunk = new Uint8Array(12 + chunkData.length);
+    const dv = new DataView(chunk.buffer);
+    dv.setUint32(0, chunkData.length, false);
+    for (let i = 0; i < 4; i++) {
+      chunk[4 + i] = typeStr.charCodeAt(i);
+    }
+    chunk.set(chunkData, 8);
+    const crc = computeCrc32(chunk.subarray(4, 8 + chunkData.length));
+    dv.setUint32(8 + chunkData.length, crc, false);
+    return chunk;
+  }
+
+  const ihdr = new Uint8Array(13);
+  const ihdrDv = new DataView(ihdr.buffer);
+  ihdrDv.setUint32(0, width, false);
+  ihdrDv.setUint32(4, height, false);
+  ihdr[8] = 8; // 8-bit depth
+  ihdr[9] = 6; // RGBA color type
+
+  const pngSig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdrChunk = encodePngChunk('IHDR', ihdr);
+  const idatChunk = encodePngChunk('IDAT', idatData);
+  const iendChunk = encodePngChunk('IEND', new Uint8Array(0));
+
+  const pngOut = new Uint8Array(
+    pngSig.length + ihdrChunk.length + idatChunk.length + iendChunk.length
+  );
+  let p = 0;
+  pngOut.set(pngSig, p);
+  p += pngSig.length;
+  pngOut.set(ihdrChunk, p);
+  p += ihdrChunk.length;
+  pngOut.set(idatChunk, p);
+  p += idatChunk.length;
+  pngOut.set(iendChunk, p);
+  return pngOut;
+}
+
+/**
+ * Menghasilkan file ikon resmi macOS Apple Icon Image (`AppIcon.icns`) murni di memori:
+ * - Desain Ikon Option 1 (Kubah Akustik Putih "O" + 5 Bar Equalizer Vokal Electric Cyan di atas Squircle Midnight Sapphire)
+ * - Berisi chunk 'ic08' (256x256 Retina PNG) dan 'ic07' (128x128 PNG) sesuai spesifikasi Apple ICNS.
+ */
+export function buildOpungAppIconIcns(): Uint8Array {
+  if (cachedOpungIcnsBytes) {
+    return cachedOpungIcnsBytes;
+  }
+
+  const png128 = renderOpungIconPng(128);
+  const png256 = renderOpungIconPng(256);
   const totalIcnsLen = 8 + (8 + png128.length) + (8 + png256.length);
   const icns = new Uint8Array(totalIcnsLen);
   const icnsDv = new DataView(icns.buffer);

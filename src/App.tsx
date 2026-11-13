@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MacOSDesktopAppWorkspace } from './components/MacOSDesktopAppWorkspace';
 import { buildMacOSDiskImageDmg } from './utils/macosAppBuilder';
+import { downloadWindowsOpungApp } from './utils/windowsAppBuilder';
 import heroStudioImg from './assets/images/opung_hero_studio_1794304548452.jpg';
 import acousticRadiusImg from './assets/images/opung_acoustic_radius_1794304549629.jpg';
 import vocalEqImg from './assets/images/opung_vocal_eq_1794304549883.jpg';
@@ -75,6 +76,11 @@ const DEMO_SCENARIOS: DemoScenario[] = [
 export default function App() {
   const [isDownloadingDmg, setIsDownloadingDmg] = useState(false);
   const [dmgDownloadedNotice, setDmgDownloadedNotice] = useState(false);
+  const [isDownloadingWin, setIsDownloadingWin] = useState(false);
+  const [winDownloadedNotice, setWinDownloadedNotice] = useState<
+    'exe' | 'launcher-zip' | null
+  >(null);
+  const [installOsTab, setInstallOsTab] = useState<'macos' | 'windows'>('macos');
 
   // Interactive "Hear the Difference" (Krisp-style) Demo Player State
   const [activeScenario, setActiveScenario] = useState<DemoScenarioId>('office-chatter');
@@ -415,6 +421,16 @@ export default function App() {
     }
   };
 
+  const handleDownloadWindowsApp = async () => {
+    setIsDownloadingWin(true);
+    try {
+      const result = await downloadWindowsOpungApp();
+      setWinDownloadedNotice(result.mode);
+    } finally {
+      setIsDownloadingWin(false);
+    }
+  };
+
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
     if (el) {
@@ -519,24 +535,36 @@ export default function App() {
                   vokal secara otomatis tanpa tombol pengaturan yang rumit.
                 </p>
 
-                {/* Primary CTA Row: Satu Pintu Unduhan (.dmg) */}
-                <div className="mt-8 flex flex-wrap items-center gap-4">
+                {/* Primary CTA Row: Unduhan macOS (.dmg) & Windows (.exe) */}
+                <div className="mt-8 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     onClick={handleDownloadMacOSApp}
                     disabled={isDownloadingDmg}
-                    className="inline-flex items-center gap-2.5 px-6 py-3.5 text-sm font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-xl transition-all cursor-pointer shadow-lg shadow-sky-500/15 whitespace-nowrap"
+                    className="inline-flex items-center gap-2.5 px-5 py-3.5 text-sm font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-xl transition-all cursor-pointer shadow-lg shadow-sky-500/15 whitespace-nowrap"
                   >
                     <Download className="w-4 h-4 shrink-0" />
                     {isDownloadingDmg
-                      ? 'Menyiapkan OPUNG-Installer.dmg...'
+                      ? 'Menyiapkan .dmg...'
                       : 'Unduh untuk macOS (.dmg)'}
                   </button>
 
                   <button
                     type="button"
+                    onClick={handleDownloadWindowsApp}
+                    disabled={isDownloadingWin}
+                    className="inline-flex items-center gap-2.5 px-5 py-3.5 text-sm font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-all cursor-pointer shadow-lg shadow-emerald-500/15 whitespace-nowrap"
+                  >
+                    <Download className="w-4 h-4 shrink-0" />
+                    {isDownloadingWin
+                      ? 'Menyiapkan .exe...'
+                      : 'Unduh untuk Windows (.exe)'}
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => scrollToSection('dengar-bedanya')}
-                    className="inline-flex items-center gap-2 px-5 py-3.5 text-xs font-semibold text-slate-200 hover:text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-xl transition-colors cursor-pointer whitespace-nowrap"
+                    className="inline-flex items-center gap-2 px-4 py-3.5 text-xs font-semibold text-slate-200 hover:text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 rounded-xl transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <Play className="w-3.5 h-3.5 fill-current text-sky-400" />
                     Dengar Demo Suara &darr;
@@ -544,12 +572,35 @@ export default function App() {
                 </div>
 
                 {dmgDownloadedNotice && (
-                  <div className="mt-4 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-950/25 text-xs text-emerald-200 flex items-center gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div className="mt-4 p-3.5 rounded-xl border border-sky-500/40 bg-sky-950/25 text-xs text-sky-100 flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
                     <span>
                       <strong>OPUNG-Installer.dmg</strong> berhasil diunduh! Klik 2x file tersebut
                       di folder Downloads Anda, geser <strong>OPUNG.app</strong> ke folder{' '}
                       <strong>Applications</strong>, lalu buka aplikasinya.
+                    </span>
+                  </div>
+                )}
+
+                {winDownloadedNotice === 'exe' && (
+                  <div className="mt-4 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-950/25 text-xs text-emerald-200 flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      <strong>Opung-Windows-x64.exe</strong> berhasil diunduh! Jalankan aplikasinya
+                      (akan tampil di System Tray Windows), lalu pilih{' '}
+                      <strong>CABLE Output (VB-Audio Virtual Cable)</strong> di Google Meet / Zoom.
+                    </span>
+                  </div>
+                )}
+
+                {winDownloadedNotice === 'launcher-zip' && (
+                  <div className="mt-4 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-950/25 text-xs text-emerald-200 flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      <strong>Opung-Windows-Launcher.zip</strong> berhasil diunduh! Ekstrak ZIP lalu
+                      klik 2x <strong>Opung-Windows.bat</strong>. Untuk file native{' '}
+                      <strong>Opung-Windows-x64.exe</strong> tunggal, tersedia otomatis di{' '}
+                      <strong>GitHub Releases</strong>.
                     </span>
                   </div>
                 )}
@@ -655,7 +706,7 @@ export default function App() {
                 10 ms · &lt; 2% CPU
               </div>
               <div className="text-xs text-slate-400 mt-1">
-                Ringan di MacBook tanpa bikin kipas panas
+                Ringan di MacBook &amp; PC Windows tanpa bikin kipas panas
               </div>
             </div>
           </div>
@@ -1063,7 +1114,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* STEP-BY-STEP INSTALLATION GUIDE (1 PINTU .DMG · GESER KE APPLICATIONS) */}
+        {/* STEP-BY-STEP INSTALLATION GUIDE (MACOS .DMG & WINDOWS .EXE) */}
         <section
           id="panduan-instalasi"
           className="scroll-mt-24 rounded-2xl border border-slate-800 bg-[#0D1119] p-6 sm:p-10 space-y-8"
@@ -1071,173 +1122,327 @@ export default function App() {
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 border-b border-slate-800 pb-6">
             <div className="max-w-2xl">
               <div className="text-xs font-mono uppercase tracking-widest text-emerald-400">
-                INSTALASI STANDAR MACOS (.DMG) · GESER KE APPLICATIONS · TANPA TERMINAL
+                {installOsTab === 'macos'
+                  ? 'INSTALASI STANDAR MACOS (.DMG) · GESER KE APPLICATIONS · TANPA TERMINAL'
+                  : 'INSTALASI WINDOWS 10 / 11 (.EXE) · SYSTEM TRAY + VB-CABLE'}
               </div>
               <h2 className="font-display text-2xl sm:text-3xl font-bold text-white mt-1.5">
-                3 Langkah Mudah Memasang OPUNG di MacBook
+                {installOsTab === 'macos'
+                  ? '3 Langkah Mudah Memasang Opung di MacBook'
+                  : '3 Langkah Mudah Memasang Opung di Windows'}
               </h2>
               <p className="text-sm text-slate-300 mt-2 leading-relaxed">
-                Persis seperti aplikasi macOS pada umumnya: cukup buka{' '}
-                <strong>OPUNG-Installer.dmg</strong>, geser ikon <strong>OPUNG.app</strong> ke
-                folder <strong>Applications</strong> di sebelahnya, lalu jalankan.
+                {installOsTab === 'macos' ? (
+                  <>
+                    Persis seperti aplikasi macOS pada umumnya: cukup buka{' '}
+                    <strong>OPUNG-Installer.dmg</strong>, geser ikon <strong>OPUNG.app</strong> ke
+                    folder <strong>Applications</strong> di sebelahnya, lalu jalankan.
+                  </>
+                ) : (
+                  <>
+                    Pasang driver virtual mic gratis <strong>VB-CABLE</strong> sekali saja, lalu
+                    jalankan <strong>Opung-Windows-x64.exe</strong> (atau{' '}
+                    <strong>Opung-Windows.bat</strong> dari paket Launcher) untuk menjernihkan mic Anda.
+                  </>
+                )}
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleDownloadMacOSApp}
-              disabled={isDownloadingDmg}
-              className="inline-flex items-center justify-center gap-2.5 px-5 py-3 text-xs font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <Download className="w-4 h-4" />
-              {isDownloadingDmg ? 'Menyiapkan .dmg...' : 'Unduh OPUNG-Installer.dmg'}
-            </button>
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              {/* OS Selector Tabs */}
+              <div
+                role="tablist"
+                aria-label="Pilih Sistem Operasi"
+                className="inline-flex rounded-xl p-1 bg-[#080B11] border border-slate-800"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={installOsTab === 'macos'}
+                  onClick={() => setInstallOsTab('macos')}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                    installOsTab === 'macos'
+                      ? 'bg-sky-400 text-slate-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  macOS (.dmg)
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={installOsTab === 'windows'}
+                  onClick={() => setInstallOsTab('windows')}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                    installOsTab === 'windows'
+                      ? 'bg-emerald-400 text-slate-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Windows (.exe)
+                </button>
+              </div>
+
+              {installOsTab === 'macos' ? (
+                <button
+                  type="button"
+                  onClick={handleDownloadMacOSApp}
+                  disabled={isDownloadingDmg}
+                  className="inline-flex items-center justify-center gap-2.5 px-5 py-3 text-xs font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloadingDmg ? 'Menyiapkan .dmg...' : 'Unduh OPUNG-Installer.dmg'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDownloadWindowsApp}
+                  disabled={isDownloadingWin}
+                  className="inline-flex items-center justify-center gap-2.5 px-5 py-3 text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloadingWin ? 'Menyiapkan .exe...' : 'Unduh untuk Windows (.exe)'}
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* LANGKAH 1: BUKA DMG & GESER KE APPLICATIONS */}
-            <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="text-xs font-mono font-bold text-sky-400">
-                  LANGKAH 1 · GESER KE APPLICATIONS
-                </div>
-                <h3 className="font-display text-lg font-bold text-white">
-                  Buka .dmg &amp; Geser OPUNG.app ke Applications
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Klik 2x file <code className="font-mono text-sky-300">OPUNG-Installer.dmg</code>.
-                  Di jendela yang terbuka, <strong>geser (drag &amp; drop) ikon OPUNG.app</strong>{' '}
-                  di kiri ke pintasan folder <strong>Applications</strong> di sebelah kanan:
-                </p>
-
-                {/* Visual Preview of the macOS DMG Finder Window (OPUNG.app -> Applications, 2 items) */}
-                <div className="rounded-xl border border-slate-700/80 bg-[#121824] overflow-hidden select-none">
-                  <div className="px-3 py-1.5 bg-[#1B2232] border-b border-slate-700/70 flex items-center justify-between text-[10px] text-slate-300">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-[#ff5f56]" />
-                      <span className="w-2 h-2 rounded-full bg-[#ffbd2e]" />
-                      <span className="w-2 h-2 rounded-full bg-[#27c93f]" />
-                    </div>
-                    <div className="flex items-center gap-1.5 font-semibold text-slate-200">
-                      <img
-                        src="/opung-icon.png"
-                        alt=""
-                        className="w-3.5 h-3.5 rounded-[3px]"
-                      />
-                      <span>OPUNG Installer</span>
-                    </div>
-                    <span className="text-slate-500 font-mono">2 items</span>
+          {installOsTab === 'macos' ? (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* LANGKAH 1: BUKA DMG & GESER KE APPLICATIONS */}
+              <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-bold text-sky-400">
+                    LANGKAH 1 · GESER KE APPLICATIONS
                   </div>
+                  <h3 className="font-display text-lg font-bold text-white">
+                    Buka .dmg &amp; Geser OPUNG.app ke Applications
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Klik 2x file <code className="font-mono text-sky-300">OPUNG-Installer.dmg</code>.
+                    Di jendela yang terbuka, <strong>geser (drag &amp; drop) ikon OPUNG.app</strong>{' '}
+                    di kiri ke pintasan folder <strong>Applications</strong> di sebelah kanan:
+                  </p>
 
-                  <div className="px-5 py-4 flex items-center justify-around gap-2">
-                    {/* Left Item: OPUNG.app */}
-                    <div className="flex flex-col items-center gap-1.5">
-                      <img
-                        src="/opung-icon.png"
-                        alt="OPUNG.app"
-                        className="w-12 h-12 rounded-xl shadow-lg shadow-sky-500/20 border border-sky-400/30"
-                      />
-                      <span className="text-[11px] font-semibold text-slate-100">
-                        OPUNG.app
-                      </span>
+                  {/* Visual Preview of the macOS DMG Finder Window (OPUNG.app -> Applications, 2 items) */}
+                  <div className="rounded-xl border border-slate-700/80 bg-[#121824] overflow-hidden select-none">
+                    <div className="px-3 py-1.5 bg-[#1B2232] border-b border-slate-700/70 flex items-center justify-between text-[10px] text-slate-300">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-[#ff5f56]" />
+                        <span className="w-2 h-2 rounded-full bg-[#ffbd2e]" />
+                        <span className="w-2 h-2 rounded-full bg-[#27c93f]" />
+                      </div>
+                      <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                        <img
+                          src="/opung-icon.png"
+                          alt=""
+                          className="w-3.5 h-3.5 rounded-[3px]"
+                        />
+                        <span>OPUNG Installer</span>
+                      </div>
+                      <span className="text-slate-500 font-mono">2 items</span>
                     </div>
 
-                    {/* Drag Arrow */}
-                    <div className="flex flex-col items-center text-sky-400 font-mono text-[10px]">
-                      <span className="uppercase tracking-wider">Geser</span>
-                      <span className="text-base leading-none font-bold">&rarr;</span>
-                    </div>
-
-                    {/* Right Item: macOS Applications Folder Alias */}
-                    <div className="flex flex-col items-center gap-1.5">
-                      <div className="relative w-12 h-12 rounded-xl bg-gradient-to-b from-sky-400 to-sky-600 border border-sky-300/50 shadow-lg flex items-center justify-center">
-                        <span className="font-display font-extrabold text-white/85 text-lg">
-                          A
-                        </span>
-                        <span className="absolute -bottom-1 -left-1 w-4 h-4 rounded-full bg-white text-slate-900 text-[9px] font-extrabold flex items-center justify-center shadow">
-                          &#8618;
+                    <div className="px-5 py-4 flex items-center justify-around gap-2">
+                      {/* Left Item: OPUNG.app */}
+                      <div className="flex flex-col items-center gap-1.5">
+                        <img
+                          src="/opung-icon.png"
+                          alt="OPUNG.app"
+                          className="w-12 h-12 rounded-xl shadow-lg shadow-sky-500/20 border border-sky-400/30"
+                        />
+                        <span className="text-[11px] font-semibold text-slate-100">
+                          OPUNG.app
                         </span>
                       </div>
-                      <span className="text-[11px] font-semibold text-slate-100">
-                        Applications
-                      </span>
+
+                      {/* Drag Arrow */}
+                      <div className="flex flex-col items-center text-sky-400 font-mono text-[10px]">
+                        <span className="uppercase tracking-wider">Geser</span>
+                        <span className="text-base leading-none font-bold">&rarr;</span>
+                      </div>
+
+                      {/* Right Item: macOS Applications Folder Alias */}
+                      <div className="flex flex-col items-center gap-1.5">
+                        <div className="relative w-12 h-12 rounded-xl bg-gradient-to-b from-sky-400 to-sky-600 border border-sky-300/50 shadow-lg flex items-center justify-center">
+                          <span className="font-display font-extrabold text-white/85 text-lg">
+                            A
+                          </span>
+                          <span className="absolute -bottom-1 -left-1 w-4 h-4 rounded-full bg-white text-slate-900 text-[9px] font-extrabold flex items-center justify-center shadow">
+                            &#8618;
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-slate-100">
+                          Applications
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadMacOSApp}
+                  disabled={isDownloadingDmg}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloadingDmg ? 'Menyiapkan .dmg...' : 'Unduh OPUNG-Installer.dmg'}
+                </button>
+              </div>
+
+              {/* LANGKAH 2 */}
+              <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-bold text-sky-400">
+                    LANGKAH 2 · BUKA DARI APPLICATIONS
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-white">
+                    Klik Kanan &rarr; Open Opung di Applications
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Buka folder <strong>Applications</strong> di MacBook Anda, lalu pada ikon{' '}
+                    <strong>Opung</strong> cukup{' '}
+                    <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>. Opung akan langsung
+                    memunculkan ikon <strong>Opung di Menu Bar</strong> atas dan mengalirkan
+                    suara jernih ke <strong>BlackHole 2ch</strong>.
+                  </p>
+                </div>
+
+                <div className="rounded-lg bg-slate-900/90 border border-slate-800 px-3.5 py-2.5 text-xs font-mono text-emerald-300 flex items-center justify-between">
+                  <span>Aktif di /Applications &amp; Menu Bar</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                </div>
+              </div>
+
+              {/* LANGKAH 3 */}
+              <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-bold text-emerald-400">
+                    LANGKAH 3 · PILIH MIC DI MEET / ZOOM
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-white">
+                    Pilih &ldquo;BlackHole 2ch&rdquo; Saat Rapat
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Buka pengaturan <strong>Audio</strong> di Google Meet, Zoom, atau Microsoft Teams,
+                    lalu pilih <strong>BlackHole 2ch</strong> sebagai mikrofon rapat Anda:
+                  </p>
+                </div>
+
+                <div className="space-y-2.5 bg-slate-900/90 border border-slate-800 rounded-lg p-3.5 font-mono text-xs">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase">
+                      MICROPHONE (INPUT RAPAT)
+                    </div>
+                    <div className="text-emerald-300 font-bold mt-0.5 flex items-center gap-1.5">
+                      <Mic className="w-3.5 h-3.5" />
+                      BlackHole 2ch
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-slate-800">
+                    <div className="text-[10px] text-slate-400 uppercase">
+                      SPEAKERS (OUTPUT SUARA TEMAN)
+                    </div>
+                    <div className="text-sky-300 font-bold mt-0.5 flex items-center gap-1.5">
+                      <Volume2 className="w-3.5 h-3.5" />
+                      MacBook Speakers / Earphone Anda
                     </div>
                   </div>
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={handleDownloadMacOSApp}
-                disabled={isDownloadingDmg}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-              >
-                <Download className="w-4 h-4" />
-                {isDownloadingDmg ? 'Menyiapkan .dmg...' : 'Unduh OPUNG-Installer.dmg'}
-              </button>
             </div>
-
-            {/* LANGKAH 2 */}
-            <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="text-xs font-mono font-bold text-sky-400">
-                  LANGKAH 2 · BUKA DARI APPLICATIONS
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* LANGKAH 1 WINDOWS: PASANG VB-CABLE */}
+              <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-bold text-emerald-400">
+                    LANGKAH 1 · DRIVER VIRTUAL MIC
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-white">
+                    Pasang VB-CABLE (Gratis, Sekali Saja)
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Unduh dan ekstrak <strong>VB-Audio Virtual Cable (VB-CABLE)</strong> dari{' '}
+                    <span className="font-mono text-emerald-300">vb-audio.com/Cable</span>, klik
+                    kanan <code className="font-mono text-sky-300">VBCABLE_Setup_x64.exe</code>{' '}
+                    &rarr; <strong>Run as administrator</strong> &rarr; <strong>Install Driver</strong>.
+                  </p>
                 </div>
-                <h3 className="font-display text-lg font-bold text-white">
-                  Klik Kanan &rarr; Open OPUNG di Applications
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Buka folder <strong>Applications</strong> di MacBook Anda, lalu pada ikon{' '}
-                  <strong>OPUNG</strong> cukup{' '}
-                  <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>. OPUNG akan langsung
-                  memunculkan ikon <strong>🎙️ OPUNG di Menu Bar</strong> atas dan mengalirkan
-                  suara jernih ke <strong>BlackHole 2ch</strong>.
-                </p>
+
+                <div className="rounded-lg bg-slate-900/90 border border-slate-800 px-3.5 py-2.5 text-xs font-mono text-sky-300 flex items-center justify-between">
+                  <span>Membuat CABLE Input &amp; Output</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                </div>
               </div>
 
-              <div className="rounded-lg bg-slate-900/90 border border-slate-800 px-3.5 py-2.5 text-xs font-mono text-emerald-300 flex items-center justify-between">
-                <span>Aktif di /Applications &amp; Menu Bar</span>
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              {/* LANGKAH 2 WINDOWS: JALANKAN OPUNG .EXE */}
+              <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-bold text-sky-400">
+                    LANGKAH 2 · JALANKAN OPUNG WINDOWS
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-white">
+                    Buka Opung-Windows-x64.exe
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Klik 2x <strong>Opung-Windows-x64.exe</strong> (dari GitHub Releases) atau
+                    ekstrak paket <strong>Opung-Windows-Launcher.zip</strong> lalu buka{' '}
+                    <code className="font-mono text-sky-300">Opung-Windows.bat</code>. Opung aktif
+                    di System Tray dan otomatis mengunci output ke <strong>CABLE Input</strong>.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadWindowsApp}
+                  disabled={isDownloadingWin}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloadingWin ? 'Menyiapkan .exe...' : 'Unduh untuk Windows (.exe)'}
+                </button>
+              </div>
+
+              {/* LANGKAH 3 WINDOWS: PILIH CABLE OUTPUT DI MEET / ZOOM */}
+              <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-bold text-emerald-400">
+                    LANGKAH 3 · PILIH MIC DI MEET / ZOOM
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-white">
+                    Pilih &ldquo;CABLE Output (VB-Audio)&rdquo;
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Buka pengaturan <strong>Audio</strong> di Google Meet, Zoom, atau Microsoft Teams
+                    di PC Windows Anda, lalu pilih mikrofon virtual VB-CABLE:
+                  </p>
+                </div>
+
+                <div className="space-y-2.5 bg-slate-900/90 border border-slate-800 rounded-lg p-3.5 font-mono text-xs">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase">
+                      MICROPHONE (INPUT RAPAT)
+                    </div>
+                    <div className="text-emerald-300 font-bold mt-0.5 flex items-center gap-1.5">
+                      <Mic className="w-3.5 h-3.5" />
+                      CABLE Output (VB-Audio Virtual Cable)
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-slate-800">
+                    <div className="text-[10px] text-slate-400 uppercase">
+                      SPEAKERS (OUTPUT SUARA TEMAN)
+                    </div>
+                    <div className="text-sky-300 font-bold mt-0.5 flex items-center gap-1.5">
+                      <Volume2 className="w-3.5 h-3.5" />
+                      Headset / Speaker Laptop Windows Anda
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-
-            {/* LANGKAH 3 */}
-            <div className="rounded-xl border border-slate-800 bg-[#080B11] p-6 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="text-xs font-mono font-bold text-emerald-400">
-                  LANGKAH 3 · PILIH MIC DI MEET / ZOOM
-                </div>
-                <h3 className="font-display text-lg font-bold text-white">
-                  Pilih &ldquo;BlackHole 2ch&rdquo; Saat Rapat
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Buka pengaturan <strong>Audio</strong> di Google Meet, Zoom, atau Microsoft Teams,
-                  lalu pilih <strong>BlackHole 2ch</strong> sebagai mikrofon rapat Anda:
-                </p>
-              </div>
-
-              <div className="space-y-2.5 bg-slate-900/90 border border-slate-800 rounded-lg p-3.5 font-mono text-xs">
-                <div>
-                  <div className="text-[10px] text-slate-400 uppercase">
-                    MICROPHONE (INPUT RAPAT)
-                  </div>
-                  <div className="text-emerald-300 font-bold mt-0.5 flex items-center gap-1.5">
-                    <Mic className="w-3.5 h-3.5" />
-                    BlackHole 2ch
-                  </div>
-                </div>
-                <div className="pt-2 border-t border-slate-800">
-                  <div className="text-[10px] text-slate-400 uppercase">
-                    SPEAKERS (OUTPUT SUARA TEMAN)
-                  </div>
-                  <div className="text-sky-300 font-bold mt-0.5 flex items-center gap-1.5">
-                    <Volume2 className="w-3.5 h-3.5" />
-                    MacBook Speakers / Earphone Anda
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          )}
         </section>
       </main>
 
