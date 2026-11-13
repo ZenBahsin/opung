@@ -9,6 +9,7 @@
   [![Audio Engine](https://img.shields.io/badge/DSP%20Engine-48%20kHz%20Studio%20HD-10b981?style=flat-square)](#4-mesin-audio-pintar-otomatis)
   [![Virtual Mic](https://img.shields.io/badge/Virtual%20Mic-BlackHole%202ch%20(CoreAudio%20HAL)-38bdf8?style=flat-square)](#integrasi-google-meet--zoom)
   [![Version](https://img.shields.io/badge/Versi-1.0-f43f5e?style=flat-square)](#lisensi--kredit)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-eab308?style=flat-square)](LICENSE)
 </div>
 
 ---
@@ -147,6 +148,8 @@ npm run build
 ---
 
 ## Lisensi & Kredit
+
+Proyek ini dilisensikan di bawah **[MIT License](LICENSE)**.
 
 <div align="center">
   <p>
