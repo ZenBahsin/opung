@@ -315,7 +315,30 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   const virtualSinkAudioRef = useRef<HTMLAudioElement | null>(null);
   const earphoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const cleanStreamRef = useRef<MediaStream | null>(null);
+  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const outputDevicesRef = useRef<MediaDeviceInfo[]>([]);
+  const selectedOutputIdRef = useRef<string>('');
+  const appliedSinkIdRef = useRef<string>('');
   const loopbackAudibleRef = useRef<boolean>(loopbackAudible);
+
+  useEffect(() => {
+    if (virtualSinkAudioRef.current) {
+      virtualSinkAudioRef.current.muted = true;
+      virtualSinkAudioRef.current.volume = 0;
+    }
+    if (earphoneAudioRef.current) {
+      earphoneAudioRef.current.muted = true;
+      earphoneAudioRef.current.volume = 0;
+    }
+  }, []);
+
+  useEffect(() => {
+    outputDevicesRef.current = outputDevices;
+  }, [outputDevices]);
+
+  useEffect(() => {
+    selectedOutputIdRef.current = selectedOutputId;
+  }, [selectedOutputId]);
 
   useEffect(() => {
     isEnabledRef.current = isEnabled;
@@ -372,7 +395,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       presenceNode.gain.setTargetAtTime(vocalClarityEnabled ? 4.5 : 0.0, now, 0.02);
       airShelfNode.gain.setTargetAtTime(vocalClarityEnabled ? 3.5 : 0.0, now, 0.02);
       makeupGainNode.gain.setTargetAtTime(
-        loopbackAudibleRef.current ? 0.85 : vocalClarityEnabled ? 1.35 : 1.0,
+        loopbackAudibleRef.current ? 0.85 : vocalClarityEnabled ? 1.65 : 1.15,
         now,
         0.02
       );
@@ -503,16 +526,15 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   }, []);
 
   const applyVirtualSinkOutput = useCallback(
-    async (sinkId: string, customOuts?: MediaDeviceInfo[]) => {
+    async (
+      sinkId: string,
+      customOuts?: MediaDeviceInfo[],
+      forceRebind?: boolean
+    ) => {
+      selectedOutputIdRef.current = sinkId;
       setSelectedOutputId(sinkId);
       const audioEl = virtualSinkAudioRef.current;
       if (!audioEl) return;
-
-      // WAJIB: Selalu bisukan & lepas srcObject terlebih dahulu agar stream baru ke BlackHole 2ch segar
-      audioEl.muted = true;
-      audioEl.volume = 0;
-      audioEl.pause();
-      audioEl.srcObject = null;
 
       if (
         !sinkId ||
@@ -520,14 +542,23 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         sinkId === 'communications' ||
         sinkId === 'coreaudio-default'
       ) {
+        appliedSinkIdRef.current = '';
+        audioEl.muted = true;
+        audioEl.volume = 0;
+        audioEl.pause();
+        audioEl.srcObject = null;
         setSinkConnectedText('Siaga (Earphone Aman)');
         return;
       }
 
-      const list = customOuts || outputDevices;
+      const list = customOuts || outputDevicesRef.current;
       const chosenDev = list.find((d) => d.deviceId === sinkId);
       if (chosenDev && isPhysicalSpeakerOrEarphoneLabel(chosenDev.label)) {
-        // Cegah pengguna tidak sengaja memilih Earphone/Speaker fisik di Output #2
+        appliedSinkIdRef.current = '';
+        audioEl.muted = true;
+        audioEl.volume = 0;
+        audioEl.pause();
+        audioEl.srcObject = null;
         setSinkConnectedText('Diblokir (Ini Earphone/Speaker!)');
         return;
       }
@@ -536,14 +567,35 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         await audioCtxRef.current.resume().catch(() => {});
       }
 
+      // PENTING: Jika sudah aktif memutar stream yang sama ke BlackHole 2ch, JANGAN pause/reset srcObject!
+      if (
+        !forceRebind &&
+        appliedSinkIdRef.current === sinkId &&
+        cleanStreamRef.current &&
+        audioEl.srcObject === cleanStreamRef.current &&
+        !audioEl.muted
+      ) {
+        if (audioEl.paused) {
+          await audioEl.play().catch(() => {});
+        }
+        setSinkConnectedText('AKTIF KE BLACKHOLE 2CH ✓');
+        return;
+      }
+
       try {
         const elWithSink = audioEl as HTMLAudioElement & {
           setSinkId?: (id: string) => Promise<void>;
         };
         if (typeof elWithSink.setSinkId === 'function') {
-          await elWithSink.setSinkId(sinkId);
+          if (appliedSinkIdRef.current !== sinkId || forceRebind) {
+            audioEl.muted = true;
+            await elWithSink.setSinkId(sinkId);
+            appliedSinkIdRef.current = sinkId;
+          }
           if (cleanStreamRef.current) {
-            audioEl.srcObject = cleanStreamRef.current;
+            if (audioEl.srcObject !== cleanStreamRef.current) {
+              audioEl.srcObject = cleanStreamRef.current;
+            }
             audioEl.volume = 1.0;
             audioEl.muted = false;
             await audioEl.play().catch(() => {});
@@ -553,10 +605,15 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           }
         } else {
           // JANGAN PERNAH unmute jika setSinkId tidak didukung, karena akan bocor ke Earphone Default!
+          appliedSinkIdRef.current = '';
+          audioEl.muted = true;
+          audioEl.volume = 0;
+          audioEl.pause();
           audioEl.srcObject = null;
           setSinkConnectedText('Siaga (Tanpa Bocor Earphone)');
         }
       } catch {
+        appliedSinkIdRef.current = '';
         audioEl.muted = true;
         audioEl.volume = 0;
         audioEl.pause();
@@ -564,7 +621,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         setSinkConnectedText('Siaga (Earphone Aman)');
       }
     },
-    [outputDevices]
+    []
   );
 
   const refreshAudioDevices = useCallback(async () => {
@@ -586,6 +643,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           !isDeprecatedOpungDriverLabel(d.label)
       );
       setInputDevices(ins);
+      outputDevicesRef.current = outs;
       setOutputDevices(outs);
 
       // Prioritaskan "BlackHole 2ch" sebagai satu-satunya mikrofon virtual resmi
@@ -603,21 +661,22 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             isVirtualCableLabel(d.label)
         );
       if (blackHoleOut) {
+        const curSel = selectedOutputIdRef.current;
         const currentValid = outs.some(
           (d) =>
-            d.deviceId === selectedOutputId &&
+            d.deviceId === curSel &&
             d.deviceId !== 'default' &&
             d.deviceId !== 'communications' &&
             !isPhysicalSpeakerOrEarphoneLabel(d.label)
         );
-        if (!selectedOutputId || !currentValid || selectedOutputId === blackHoleOut.deviceId) {
-          await applyVirtualSinkOutput(blackHoleOut.deviceId, outs);
+        if (!curSel || !currentValid || curSel === blackHoleOut.deviceId) {
+          await applyVirtualSinkOutput(blackHoleOut.deviceId, outs, false);
         }
       }
     } catch {
       // Ignore before permission
     }
-  }, [selectedOutputId, applyVirtualSinkOutput]);
+  }, [applyVirtualSinkOutput]);
 
   useEffect(() => {
     refreshAudioDevices();
@@ -630,6 +689,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   }, [refreshAudioDevices]);
 
   const stopLiveMacMicrophone = useCallback(async () => {
+    appliedSinkIdRef.current = '';
     if (virtualSinkAudioRef.current) {
       virtualSinkAudioRef.current.muted = true;
       virtualSinkAudioRef.current.volume = 0;
@@ -641,6 +701,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       earphoneAudioRef.current.volume = 0;
       earphoneAudioRef.current.pause();
       earphoneAudioRef.current.srcObject = null;
+    }
+    if (processorNodeRef.current) {
+      processorNodeRef.current.onaudioprocess = null;
+      processorNodeRef.current.disconnect();
+      processorNodeRef.current = null;
     }
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -829,8 +894,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         makeupGainNode.gain.value = loopbackAudibleRef.current
           ? 0.85
           : isClarityOn
-          ? 1.35
-          : 1.0;
+          ? 1.65
+          : 1.15;
 
         clarityNodesRef.current = {
           mudCutNode,
@@ -842,6 +907,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         };
 
         const processorNode = ctx.createScriptProcessor(512, 1, 1);
+        processorNodeRef.current = processorNode;
         const dspCore = new NearFieldMacDspCore();
         dspCoreRef.current = dspCore;
 
@@ -923,6 +989,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             !isDeprecatedOpungDriverLabel(d.label)
         );
         setInputDevices(ins);
+        outputDevicesRef.current = outs;
         setOutputDevices(outs);
 
         const blackHoleOut =
@@ -940,7 +1007,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           );
         const validSelectedOut = outs.find(
           (d) =>
-            d.deviceId === selectedOutputId &&
+            d.deviceId === selectedOutputIdRef.current &&
             d.deviceId !== 'default' &&
             d.deviceId !== 'communications' &&
             !isPhysicalSpeakerOrEarphoneLabel(d.label)
@@ -952,13 +1019,13 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           : '';
 
         if (virtualSinkAudioRef.current) {
-          virtualSinkAudioRef.current.muted = true;
-          virtualSinkAudioRef.current.volume = 0;
-          virtualSinkAudioRef.current.pause();
-
           if (targetSinkId) {
-            await applyVirtualSinkOutput(targetSinkId, outs);
+            await applyVirtualSinkOutput(targetSinkId, outs, true);
           } else {
+            appliedSinkIdRef.current = '';
+            virtualSinkAudioRef.current.muted = true;
+            virtualSinkAudioRef.current.volume = 0;
+            virtualSinkAudioRef.current.pause();
             virtualSinkAudioRef.current.srcObject = null;
             setSinkConnectedText('Siaga (Earphone Aman)');
           }
@@ -990,7 +1057,6 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     },
     [
       selectedInputId,
-      selectedOutputId,
       applyVirtualSinkOutput,
       routeEarphoneLoopbackToPhysicalDevice,
     ]
@@ -1011,6 +1077,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         d.kind === 'audiooutput' &&
         !isDeprecatedOpungDriverLabel(d.label)
     );
+    outputDevicesRef.current = outs;
     setOutputDevices(outs);
     const blackHole =
       outs.find(
@@ -1026,10 +1093,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           isVirtualCableLabel(d.label)
       );
     if (blackHole) {
-      await applyVirtualSinkOutput(blackHole.deviceId, outs);
-    } else if (selectedOutputId) {
-      await applyVirtualSinkOutput(selectedOutputId, outs);
+      await applyVirtualSinkOutput(blackHole.deviceId, outs, true);
+    } else if (selectedOutputIdRef.current) {
+      await applyVirtualSinkOutput(selectedOutputIdRef.current, outs, true);
     } else if (virtualSinkAudioRef.current) {
+      appliedSinkIdRef.current = '';
       virtualSinkAudioRef.current.muted = true;
       virtualSinkAudioRef.current.volume = 0;
       virtualSinkAudioRef.current.pause();
@@ -1051,7 +1119,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
     if (clarityNodesRef.current && audioCtxRef.current) {
       clarityNodesRef.current.makeupGainNode.gain.setTargetAtTime(
-        next ? 0.85 : vocalClarityRef.current ? 1.35 : 1.0,
+        next ? 0.85 : vocalClarityRef.current ? 1.65 : 1.15,
         audioCtxRef.current.currentTime,
         0.02
       );
@@ -1262,9 +1330,9 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       id="macos-desktop-app-live"
       className="border border-slate-800/90 bg-[#0D1119] rounded-2xl p-6 sm:p-8"
     >
-      {/* Hidden Audio Elements for Virtual Mic (BlackHole 2ch) and Earphone Loopback (Both muted by default) */}
-      <audio ref={virtualSinkAudioRef} muted playsInline className="hidden" />
-      <audio ref={earphoneAudioRef} muted playsInline className="hidden" />
+      {/* Hidden Audio Elements for Virtual Mic (BlackHole 2ch) and Earphone Loopback */}
+      <audio ref={virtualSinkAudioRef} playsInline className="hidden" />
+      <audio ref={earphoneAudioRef} playsInline className="hidden" />
 
       {/* Top Section Header */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-800/80">

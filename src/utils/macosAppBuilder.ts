@@ -777,12 +777,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       }
     });
 
-    async function applyOutputSink(sinkId) {
+    let appliedVirtualSinkId = '';
+
+    async function applyOutputSink(sinkId, forceRebind) {
       selectedVirtualSinkId = sinkId || '';
-      virtualCableAudioOut.muted = true;
-      virtualCableAudioOut.volume = 0;
-      virtualCableAudioOut.pause();
-      virtualCableAudioOut.srcObject = null;
 
       if (
         !sinkId ||
@@ -790,8 +788,13 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         sinkId === 'communications' ||
         sinkId === 'coreaudio-default'
       ) {
+        appliedVirtualSinkId = '';
         nativeCoreAudioSinkActive = false;
         sendNativeBridgeCommand('SINK:OFF');
+        virtualCableAudioOut.muted = true;
+        virtualCableAudioOut.volume = 0;
+        virtualCableAudioOut.pause();
+        virtualCableAudioOut.srcObject = null;
         sinkBadge.textContent = 'Siaga (Earphone Aman)';
         sinkBadge.style.color = '#94a3b8';
         return;
@@ -812,9 +815,15 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           sinkId !== 'native-blackhole-2ch' &&
           typeof virtualCableAudioOut.setSinkId === 'function'
         ) {
-          await virtualCableAudioOut.setSinkId(sinkId);
+          if (appliedVirtualSinkId !== sinkId || forceRebind) {
+            virtualCableAudioOut.muted = true;
+            await virtualCableAudioOut.setSinkId(sinkId);
+            appliedVirtualSinkId = sinkId;
+          }
           if (!hasNativeCoreAudioBridge() && currentCleanStream) {
-            virtualCableAudioOut.srcObject = currentCleanStream;
+            if (virtualCableAudioOut.srcObject !== currentCleanStream) {
+              virtualCableAudioOut.srcObject = currentCleanStream;
+            }
             virtualCableAudioOut.volume = 1.0;
             virtualCableAudioOut.muted = false;
             await virtualCableAudioOut.play().catch(() => {});
@@ -827,6 +836,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
           sinkBadge.style.color = '#34d399';
         } else {
+          appliedVirtualSinkId = '';
           virtualCableAudioOut.muted = true;
           virtualCableAudioOut.volume = 0;
           virtualCableAudioOut.pause();
@@ -838,7 +848,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     }
 
     virtualOutputSelect.addEventListener('change', (e) => {
-      applyOutputSink(e.target.value);
+      applyOutputSink(e.target.value, true);
     });
 
     micInputSelect.addEventListener('change', (e) => {
@@ -852,18 +862,18 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           await audioCtx.resume().catch(() => {});
         }
         sendNativeBridgeCommand('SINK:ON');
-        await populateMacAudioDevices(micInputSelect.value);
+        await populateMacAudioDevices(micInputSelect.value, '', true);
       });
     }
     if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
       navigator.mediaDevices.addEventListener('devicechange', () => {
-        populateMacAudioDevices(micInputSelect.value);
+        populateMacAudioDevices(micInputSelect.value, '', false);
       });
     }
 
     let labelRetryCount = 0;
 
-    async function populateMacAudioDevices(activeInputDeviceId, activeTrackLabel) {
+    async function populateMacAudioDevices(activeInputDeviceId, activeTrackLabel, forceRebind) {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const allInputs = devices.filter((d) => d.kind === 'audioinput');
       // Saring ketat agar BlackHole 2ch / OPUNG Microphone TIDAK PERNAH muncul di dropdown Input Fisik!
@@ -959,10 +969,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
       if (targetSink) {
         virtualOutputSelect.value = targetSink;
-        await applyOutputSink(targetSink);
+        await applyOutputSink(targetSink, !!forceRebind);
       } else {
         virtualOutputSelect.value = '';
-        await applyOutputSink('');
+        await applyOutputSink('', true);
       }
     }
 
@@ -1059,6 +1069,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           await audioCtx.resume().catch(() => {});
         }
         const sourceNode = audioCtx.createMediaStreamSource(stream);
+        window.__opungSourceNode = sourceNode;
 
         rawAnalyser = audioCtx.createAnalyser();
         rawAnalyser.fftSize = 128;
@@ -1113,33 +1124,30 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         studioCompressor.release.value = 0.15;
 
         const makeupGainNode = audioCtx.createGain();
-        makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.35;
+        makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.65;
         activeMakeupGainNode = makeupGainNode;
 
         const processorNode = audioCtx.createScriptProcessor(512, 1, 1);
+        window.__opungProcessorNode = processorNode;
         dspCore = new NearFieldRNNoiseDspCore();
+
+        const pcm16Scratch = new Int16Array(512);
+        const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
 
         processorNode.onaudioprocess = (ev) => {
           const inBuf = ev.inputBuffer.getChannelData(0);
           const outBuf = ev.outputBuffer.getChannelData(0);
           dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
-          hardGateGain.gain.value = (isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0) ? 0.0 : 1.0;
-        };
+          const isMutedByGate = isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0;
+          hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
 
-        // Jembatan PCM 48kHz pasca-EQ ke CoreAudio HAL Output (BlackHole 2ch) saat berjalan di OPUNG.app:
-        const nativeOutBridgeNode = audioCtx.createScriptProcessor(512, 1, 1);
-        const pcm16Scratch = new Int16Array(512);
-        const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
-        nativeOutBridgeNode.onaudioprocess = (ev) => {
-          const cleanIn = ev.inputBuffer.getChannelData(0);
-          const dummyOut = ev.outputBuffer.getChannelData(0);
-          for (let i = 0; i < cleanIn.length; i++) {
-            dummyOut[i] = 0;
-          }
+          // Kirim langsung dari processorNode utama (yang dijamin selalu ditarik oleh cleanAnalyser) ke jembatan CoreAudio HAL BlackHole 2ch!
           if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
-            for (let i = 0; i < cleanIn.length; i++) {
-              const s = Math.max(-1.0, Math.min(1.0, cleanIn[i]));
-              pcm16Scratch[i] = s < 0 ? s * 32768 : s * 32767;
+            const vocalBoost = loopbackAudible ? 1.15 : 1.85;
+            for (let i = 0; i < outBuf.length; i++) {
+              const rawSample = isMutedByGate ? 0.0 : outBuf[i] * vocalBoost;
+              const clipped = Math.tanh(rawSample);
+              pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
             }
             let bin = '';
             for (let j = 0; j < uint8Scratch.length; j++) {
@@ -1182,8 +1190,6 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         makeupGainNode.connect(hardGateGain);
         hardGateGain.connect(cleanAnalyser);
         cleanAnalyser.connect(cleanDest);
-        cleanAnalyser.connect(nativeOutBridgeNode);
-        nativeOutBridgeNode.connect(keepAliveGain);
         cleanAnalyser.connect(keepAliveGain);
         keepAliveGain.connect(audioCtx.destination);
 
@@ -1203,7 +1209,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         }
 
         document.getElementById('engineStatus').textContent = 'DSP 48kHz · Radius 1m';
-        await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel);
+        await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
       } catch (err) {
         document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
         setTimeout(() => {
@@ -1242,6 +1248,16 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
+      }
+      if (
+        !hasNativeCoreAudioBridge() &&
+        selectedVirtualSinkId &&
+        selectedVirtualSinkId !== 'native-blackhole-2ch' &&
+        virtualCableAudioOut.srcObject &&
+        !virtualCableAudioOut.muted &&
+        virtualCableAudioOut.paused
+      ) {
+        virtualCableAudioOut.play().catch(() => {});
       }
 
       const normalizedThresh = Math.max(0.15, Math.min(0.88, (thresholdDb + 50) / 38));
@@ -1313,7 +1329,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
  * Kode Objective-C Native macOS Cocoa + WebKit + CoreAudio HAL Output Bridge:
  * - Menampilkan ikon "OPUNG" di Menu Bar kanan atas macOS (dekat Wi-Fi/Baterai/Jam) persis seperti Krisp.ai!
  * - Menyediakan jembatan langsung CoreAudio HAL Output (`kAudioUnitSubType_HALOutput`) ke `BlackHole 2ch`
- *   sehingga audio 48kHz yang telah dijernihkan pasti masuk ke Google Meet / Zoom di seluruh versi macOS!
+ *   (serta otomatis membuka mute & mengatur volume hardware BlackHole 2ch ke 100% di CoreAudio)
+ *   sehingga audio yang telah dijernihkan pasti menggerakkan indikator mikrofon Google Meet / Zoom!
  */
 export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
@@ -1323,13 +1340,56 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 
 #define OPUNG_RING_SIZE 65536
 #define OPUNG_RING_MASK (OPUNG_RING_SIZE - 1)
+#define OPUNG_MAX_HAL_UNITS 4
 
 static float gBlackHoleRing[OPUNG_RING_SIZE];
-static volatile uint32_t gRingReadIdx = 0;
 static volatile uint32_t gRingWriteIdx = 0;
 static volatile int gSinkEnabled = 1;
+static volatile uint32_t gRenderHeartbeat = 0;
 
-static AudioDeviceID findBlackHoleAudioDeviceID(void) {
+typedef struct {
+    AudioComponentInstance unit;
+    AudioDeviceID deviceID;
+    double sampleRate;
+    double readPos;
+    BOOL active;
+} OpungHalSinkUnit;
+
+static OpungHalSinkUnit gHalUnits[OPUNG_MAX_HAL_UNITS];
+static int gHalUnitCount = 0;
+
+static void ensureDeviceUnmutedAndFullVolume(AudioDeviceID devID) {
+    if (devID == kAudioObjectUnknown) return;
+    AudioObjectPropertyScope scopes[2] = {
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyScopeInput
+    };
+    UInt32 elements[3] = { kAudioObjectPropertyElementMaster, 1, 2 };
+    for (int s = 0; s < 2; s++) {
+        for (int e = 0; e < 3; e++) {
+            AudioObjectPropertyAddress muteAddr = {
+                kAudioDevicePropertyMute,
+                scopes[s],
+                elements[e]
+            };
+            if (AudioObjectHasProperty(devID, &muteAddr)) {
+                UInt32 muteVal = 0;
+                AudioObjectSetPropertyData(devID, &muteAddr, 0, NULL, sizeof(muteVal), &muteVal);
+            }
+            AudioObjectPropertyAddress volAddr = {
+                kAudioDevicePropertyVolumeScalar,
+                scopes[s],
+                elements[e]
+            };
+            if (AudioObjectHasProperty(devID, &volAddr)) {
+                Float32 volVal = 1.0f;
+                AudioObjectSetPropertyData(devID, &volAddr, 0, NULL, sizeof(volVal), &volVal);
+            }
+        }
+    }
+}
+
+static int findAllVirtualAudioDeviceIDs(AudioDeviceID *outIDs, int maxCount) {
     AudioObjectPropertyAddress propAddr = {
         kAudioHardwarePropertyDevices,
         kAudioObjectPropertyScopeGlobal,
@@ -1337,18 +1397,18 @@ static AudioDeviceID findBlackHoleAudioDeviceID(void) {
     };
     UInt32 dataSize = 0;
     if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &propAddr, 0, NULL, &dataSize) != noErr || dataSize == 0) {
-        return kAudioObjectUnknown;
+        return 0;
     }
     UInt32 count = dataSize / sizeof(AudioDeviceID);
     AudioDeviceID *devices = (AudioDeviceID *)malloc(dataSize);
-    if (!devices) return kAudioObjectUnknown;
+    if (!devices) return 0;
     if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &propAddr, 0, NULL, &dataSize, devices) != noErr) {
         free(devices);
-        return kAudioObjectUnknown;
+        return 0;
     }
 
-    AudioDeviceID foundID = kAudioObjectUnknown;
-    for (UInt32 i = 0; i < count; i++) {
+    int foundCount = 0;
+    for (UInt32 i = 0; i < count && foundCount < maxCount; i++) {
         AudioDeviceID devID = devices[i];
         AudioObjectPropertyAddress streamAddr = {
             kAudioDevicePropertyStreams,
@@ -1367,17 +1427,16 @@ static AudioDeviceID findBlackHoleAudioDeviceID(void) {
             0
         };
         if (AudioObjectGetPropertyData(devID, &nameAddr, 0, NULL, &nameSize, &cfName) == noErr && cfName != NULL) {
-            NSString *name = (__bridge NSString *)cfName;
-            if ([[name lowercaseString] containsString:@"blackhole"]) {
-                foundID = devID;
-                CFRelease(cfName);
-                break;
+            NSString *name = [(__bridge NSString *)cfName lowercaseString];
+            if ([name containsString:@"blackhole"] || [name containsString:@"opung"] || [name containsString:@"vb-cable"] || [name containsString:@"soundflower"]) {
+                ensureDeviceUnmutedAndFullVolume(devID);
+                outIDs[foundCount++] = devID;
             }
             CFRelease(cfName);
         }
     }
     free(devices);
-    return foundID;
+    return foundCount;
 }
 
 static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
@@ -1387,12 +1446,36 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
                                              UInt32 inNumberFrames,
                                              AudioBufferList *ioData) {
     if (!ioData) return noErr;
+    int unitIdx = (int)(uintptr_t)inRefCon;
+    if (unitIdx < 0 || unitIdx >= OPUNG_MAX_HAL_UNITS) return noErr;
+
+    gRenderHeartbeat++;
+    OpungHalSinkUnit *sink = &gHalUnits[unitIdx];
+    double step = (sink->sampleRate > 8000.0) ? (48000.0 / sink->sampleRate) : 1.0;
+    uint32_t w = gRingWriteIdx;
+
+    // Hitung jumlah sampel yang tersedia di ring buffer untuk unit ini
+    uint32_t rInt = ((uint32_t)sink->readPos) & OPUNG_RING_MASK;
+    uint32_t avail = (w - rInt) & OPUNG_RING_MASK;
+    if (avail > 16384) {
+        // Jika tertinggal terlalu jauh (atau baru mulai), lompat ke ~1536 sampel sebelum write head
+        sink->readPos = (double)((w - 1536) & OPUNG_RING_MASK);
+        avail = 1536;
+    }
+
     for (UInt32 f = 0; f < inNumberFrames; f++) {
         float s = 0.0f;
-        uint32_t r = gRingReadIdx;
-        if (r != gRingWriteIdx && gSinkEnabled) {
-            s = gBlackHoleRing[r];
-            gRingReadIdx = (r + 1) & OPUNG_RING_MASK;
+        uint32_t curR = ((uint32_t)sink->readPos) & OPUNG_RING_MASK;
+        if (curR != w && gSinkEnabled) {
+            uint32_t nextR = (curR + 1) & OPUNG_RING_MASK;
+            float frac = (float)(sink->readPos - floor(sink->readPos));
+            float s0 = gBlackHoleRing[curR];
+            float s1 = (nextR != w) ? gBlackHoleRing[nextR] : s0;
+            s = s0 + (s1 - s0) * frac;
+            sink->readPos += step;
+            if (sink->readPos >= (double)OPUNG_RING_SIZE) {
+                sink->readPos -= (double)OPUNG_RING_SIZE;
+            }
         }
         if (ioData->mNumberBuffers == 1) {
             float *buf = (float *)ioData->mBuffers[0].mData;
@@ -1419,16 +1502,34 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
 @property (strong, nonatomic) NSStatusItem *statusItem;
 @property (strong, nonatomic) WKWebView *webView;
 @property (copy, nonatomic) NSString *htmlFilePath;
-@property (assign, nonatomic) AudioComponentInstance blackHoleUnit;
 @property (assign, nonatomic) BOOL blackHoleRunning;
+@property (assign, nonatomic) uint32_t lastCheckedHeartbeat;
+@property (assign, nonatomic) int heartbeatStallCount;
 @end
 
 @implementation AppDelegate
 
+- (void)stopAllBlackHoleHalUnits {
+    for (int i = 0; i < gHalUnitCount; i++) {
+        if (gHalUnits[i].active && gHalUnits[i].unit) {
+            AudioOutputUnitStop(gHalUnits[i].unit);
+            AudioUnitUninitialize(gHalUnits[i].unit);
+            AudioComponentInstanceDispose(gHalUnits[i].unit);
+            gHalUnits[i].unit = NULL;
+            gHalUnits[i].active = NO;
+        }
+    }
+    gHalUnitCount = 0;
+    self.blackHoleRunning = NO;
+}
+
 - (void)startBlackHoleHalOutput {
-    if (self.blackHoleRunning) return;
-    AudioDeviceID bhID = findBlackHoleAudioDeviceID();
-    if (bhID == kAudioObjectUnknown) return;
+    if (self.blackHoleRunning && gHalUnitCount > 0) return;
+    [self stopAllBlackHoleHalUnits];
+
+    AudioDeviceID devIDs[OPUNG_MAX_HAL_UNITS];
+    int found = findAllVirtualAudioDeviceIDs(devIDs, OPUNG_MAX_HAL_UNITS);
+    if (found <= 0) return;
 
     AudioComponentDescription desc = {0};
     desc.componentType = kAudioUnitType_Output;
@@ -1438,44 +1539,76 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     AudioComponent comp = AudioComponentFindNext(NULL, &desc);
     if (!comp) return;
 
-    AudioComponentInstance unit = NULL;
-    if (AudioComponentInstanceNew(comp, &unit) != noErr || !unit) return;
+    int startedCount = 0;
+    for (int idx = 0; idx < found && startedCount < OPUNG_MAX_HAL_UNITS; idx++) {
+        AudioDeviceID bhID = devIDs[idx];
+        ensureDeviceUnmutedAndFullVolume(bhID);
 
-    UInt32 enableIO = 1;
-    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &enableIO, sizeof(enableIO));
-    UInt32 disableInput = 0;
-    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &disableInput, sizeof(disableInput));
+        AudioComponentInstance unit = NULL;
+        if (AudioComponentInstanceNew(comp, &unit) != noErr || !unit) continue;
 
-    if (AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &bhID, sizeof(bhID)) != noErr) {
-        AudioComponentInstanceDispose(unit);
-        return;
-    }
+        UInt32 enableIO = 1;
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &enableIO, sizeof(enableIO));
+        UInt32 disableInput = 0;
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &disableInput, sizeof(disableInput));
 
-    AudioStreamBasicDescription asbd = {0};
-    asbd.mSampleRate = 48000.0;
-    asbd.mFormatID = kAudioFormatLinearPCM;
-    asbd.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-    asbd.mFramesPerPacket = 1;
-    asbd.mChannelsPerFrame = 2;
-    asbd.mBitsPerChannel = 32;
-    asbd.mBytesPerPacket = 8;
-    asbd.mBytesPerFrame = 8;
-    AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &asbd, sizeof(asbd));
-
-    AURenderCallbackStruct cb = {0};
-    cb.inputProc = opungBlackHoleRenderCallback;
-    cb.inputProcRefCon = (__bridge void *)self;
-    AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof(cb));
-
-    if (AudioUnitInitialize(unit) == noErr) {
-        if (AudioOutputUnitStart(unit) == noErr) {
-            self.blackHoleUnit = unit;
-            self.blackHoleRunning = YES;
-            return;
+        if (AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &bhID, sizeof(bhID)) != noErr) {
+            AudioComponentInstanceDispose(unit);
+            continue;
         }
-        AudioUnitUninitialize(unit);
+
+        // Baca format asli hardware BlackHole 2ch (baik 48000 Hz maupun 44100 Hz) agar AudioUnitInitialize selalu sukses!
+        AudioStreamBasicDescription hwFormat = {0};
+        UInt32 fmtSize = sizeof(hwFormat);
+        Float64 hwSampleRate = 48000.0;
+        UInt32 hwChannels = 2;
+        if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, &hwFormat, &fmtSize) == noErr) {
+            if (hwFormat.mSampleRate >= 8000.0 && hwFormat.mSampleRate <= 192000.0) {
+                hwSampleRate = hwFormat.mSampleRate;
+            }
+            if (hwFormat.mChannelsPerFrame >= 1 && hwFormat.mChannelsPerFrame <= 16) {
+                hwChannels = hwFormat.mChannelsPerFrame;
+            }
+        }
+
+        AudioStreamBasicDescription asbd = {0};
+        asbd.mSampleRate = hwSampleRate;
+        asbd.mFormatID = kAudioFormatLinearPCM;
+        asbd.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+        asbd.mFramesPerPacket = 1;
+        asbd.mChannelsPerFrame = hwChannels;
+        asbd.mBitsPerChannel = 32;
+        asbd.mBytesPerFrame = 4 * hwChannels;
+        asbd.mBytesPerPacket = 4 * hwChannels;
+        AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &asbd, sizeof(asbd));
+
+        int slot = startedCount;
+        gHalUnits[slot].unit = unit;
+        gHalUnits[slot].deviceID = bhID;
+        gHalUnits[slot].sampleRate = hwSampleRate;
+        gHalUnits[slot].readPos = (double)gRingWriteIdx;
+        gHalUnits[slot].active = NO;
+
+        AURenderCallbackStruct cb = {0};
+        cb.inputProc = opungBlackHoleRenderCallback;
+        cb.inputProcRefCon = (void *)(uintptr_t)slot;
+        AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof(cb));
+
+        if (AudioUnitInitialize(unit) == noErr) {
+            if (AudioOutputUnitStart(unit) == noErr) {
+                gHalUnits[slot].active = YES;
+                startedCount++;
+                continue;
+            }
+            AudioUnitUninitialize(unit);
+        }
+        AudioComponentInstanceDispose(unit);
     }
-    AudioComponentInstanceDispose(unit);
+
+    gHalUnitCount = startedCount;
+    self.blackHoleRunning = (startedCount > 0);
+    self.lastCheckedHeartbeat = gRenderHeartbeat;
+    self.heartbeatStallCount = 0;
 }
 
 - (void)userContentController:(WKUserContentController *)userContentController
@@ -1498,7 +1631,21 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
 
     if (!self.blackHoleRunning) {
         [self startBlackHoleHalOutput];
+    } else {
+        uint32_t curHb = gRenderHeartbeat;
+        if (curHb == self.lastCheckedHeartbeat) {
+            self.heartbeatStallCount++;
+            if (self.heartbeatStallCount > 35) {
+                // Jika CoreAudio sempat di-restart atau Google Meet mengubah sample rate BlackHole 2ch, otomatis sambung ulang!
+                self.blackHoleRunning = NO;
+                [self startBlackHoleHalOutput];
+            }
+        } else {
+            self.lastCheckedHeartbeat = curHb;
+            self.heartbeatStallCount = 0;
+        }
     }
+
     NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:body options:0];
     if (!pcmData || pcmData.length < 2) return;
 
@@ -1506,12 +1653,8 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     NSUInteger count = pcmData.length / sizeof(int16_t);
     uint32_t w = gRingWriteIdx;
     for (NSUInteger i = 0; i < count; i++) {
-        uint32_t nextW = (w + 1) & OPUNG_RING_MASK;
-        if (nextW == gRingReadIdx) {
-            gRingReadIdx = (gRingReadIdx + 256) & OPUNG_RING_MASK;
-        }
         gBlackHoleRing[w] = ((float)samples[i]) / 32768.0f;
-        w = nextW;
+        w = (w + 1) & OPUNG_RING_MASK;
     }
     gRingWriteIdx = w;
 }
@@ -1857,13 +2000,9 @@ elif [ -d "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/
   SDK_ARGS=("-isysroot" "$SDKROOT")
 fi
 
-# 0C. BERSIHKAN DRIVER DUPLIKAT "OPUNG.driver" AGAR HANYA ADA 1 VIRTUAL MIC ("BlackHole 2ch") TANPA BENTROK DI GOOGLE MEET
-if [ -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
-  (
-    rm -rf "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" 2>/dev/null || \\
-      /usr/bin/osascript -e 'do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/OPUNG.driver && killall coreaudiod || true" with administrator privileges' 2>/dev/null || true
-    killall coreaudiod 2>/dev/null || true
-  ) </dev/null >/dev/null 2>&1 &
+# 0C. BERSIHKAN DRIVER DUPLIKAT "OPUNG.driver" SECARA SINKRON SEBELUM BINARY JALAN AGAR TIDAK MEMATIKAN COREAUDIO SAAT AKTIF
+if [ -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ] && [ -w "/Library/Audio/Plug-Ins/HAL" ]; then
+  rm -rf "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" 2>/dev/null && killall coreaudiod 2>/dev/null && sleep 0.3 || true
 fi
 
 # Jika BlackHole2ch.driver belum terpasang sama sekali di Mac pengguna, pasang BlackHole 2ch resmi:
@@ -1922,7 +2061,7 @@ EOF_BH_PLIST
       chmod +x "$HAL_TMP/BlackHole2ch.driver/Contents/MacOS/BlackHole"
       /usr/bin/xattr -cr "$HAL_TMP/BlackHole2ch.driver" 2>/dev/null || true
       /usr/bin/codesign --force --deep --sign - "$HAL_TMP/BlackHole2ch.driver" 2>/dev/null || true
-      /usr/bin/osascript -e "do shell script \\"cp -R '$HAL_TMP/BlackHole2ch.driver' '/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver' && chown -R root:wheel '/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver' && killall coreaudiod || true\\" with administrator privileges" 2>/dev/null || true
+      /usr/bin/osascript -e "do shell script \\"cp -R '$HAL_TMP/BlackHole2ch.driver' '/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver' && rm -rf '/Library/Audio/Plug-Ins/HAL/OPUNG.driver' && chown -R root:wheel '/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver' && killall coreaudiod || true\\" with administrator privileges" 2>/dev/null || true
     fi
     rm -rf "$HAL_TMP" 2>/dev/null || true
   ) </dev/null >/dev/null 2>&1 &
@@ -1934,7 +2073,7 @@ launch_native_detached() {
   local BIN_PATH="$1"
   local HTML_ARG="$2"
 
-  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 2>/dev/null || true
+  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 2>/dev/null || true
 
   if [ -x "/usr/bin/perl" ]; then
     /usr/bin/perl -MPOSIX -e '
@@ -1964,10 +2103,10 @@ launch_native_detached() {
 SHADOW_BUNDLE="/tmp/OPUNG-Runtime-$(id -u)/OPUNG.app"
 SHADOW_MACOS_DIR="$SHADOW_BUNDLE/Contents/MacOS"
 SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
-SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV13"
-LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV13"
+SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV14"
+LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV14"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary V13 sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V14 sudah ada di bundle lokal atau di /tmp shadow bundle
 if [ -x "$LOCAL_BIN" ]; then
   launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi

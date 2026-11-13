@@ -160,8 +160,9 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
   assert.ok(MACOS_STANDALONE_APP_HTML.includes('opungAudioBridge'));
   assert.ok(!MACOS_STANDALONE_APP_HTML.includes('echoCancellation: !loopbackAudible'));
 
-  // Pastikan jembatan CoreAudio HAL Output di Objective-C tersedia untuk menulis langsung ke BlackHole 2ch
-  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('findBlackHoleAudioDeviceID'));
+  // Pastikan jembatan CoreAudio HAL Output di Objective-C tersedia untuk menulis langsung ke BlackHole 2ch & membuka mute hardware
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('findAllVirtualAudioDeviceIDs'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('ensureDeviceUnmutedAndFullVolume'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('kAudioUnitSubType_HALOutput'));
   assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('opungAudioBridge'));
 
