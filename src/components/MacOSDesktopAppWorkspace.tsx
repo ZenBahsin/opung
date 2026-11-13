@@ -1445,7 +1445,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
             </div>
 
             {/* Clean Krisp-Inspired App Body */}
-            <div className="p-4 space-y-3.5">
+            <div className="px-4 pt-3.5 pb-2.5 space-y-2.5">
               {/* 1. Primary Hero Master Switch Card */}
               <div
                 className={`p-3.5 rounded-xl border transition-colors ${
@@ -1716,10 +1716,10 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
               </button>
 
               {/* 6. Copyright & Version Footer below Loopback Test Button */}
-              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between text-[10px] text-slate-400 select-none">
+              <div className="pt-1.5 pb-0 border-t border-slate-800/70 flex items-center justify-between text-[10px] leading-tight text-slate-400 select-none">
                 <span className="inline-flex items-center gap-1">
-                  <span>&copy; Opung &middot; Made with</span>
-                  <span className="text-rose-500 text-[11px]" aria-label="love">
+                  <span>&copy; 2026 Opung &middot; Made with</span>
+                  <span className="text-rose-500 text-[10.5px]" aria-label="love">
                     &hearts;
                   </span>
                   <span className="font-semibold text-slate-300">Muhammad Zen</span>

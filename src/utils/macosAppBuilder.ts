@@ -27,22 +27,25 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
   <title>Opung - Office Proximity Ultra Noise Gate</title>
   <style>
     * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
-    body {
+    html, body {
       margin: 0;
-      padding: 14px 16px;
+      padding: 0;
       background: #090d16;
       color: #f8fafc;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
-      min-height: 100vh;
+      overflow: hidden;
+    }
+    body {
+      padding: 12px 15px 9px 15px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
     }
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding-bottom: 9px;
+      padding-bottom: 8px;
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
     }
     .brand {
@@ -75,8 +78,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       gap: 12px;
       background: #111827;
       border: 1px solid rgba(148, 163, 184, 0.16);
-      padding: 14px 16px;
-      border-radius: 14px;
+      padding: 11px 14px;
+      border-radius: 13px;
       cursor: pointer;
       transition: border-color 0.15s ease, background 0.15s ease;
     }
@@ -85,19 +88,19 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       border-color: rgba(56, 189, 248, 0.45);
     }
     .switch-title {
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 700;
       color: #f8fafc;
-      margin-bottom: 3px;
+      margin-bottom: 2px;
     }
     .switch-sub {
-      font-size: 11px;
+      font-size: 10.5px;
       color: #94a3b8;
-      line-height: 1.35;
+      line-height: 1.3;
     }
     .toggle-track {
-      width: 48px;
-      height: 26px;
+      width: 46px;
+      height: 25px;
       border-radius: 999px;
       background: #334155;
       padding: 3px;
@@ -112,26 +115,26 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       background: #0284c7;
     }
     .toggle-thumb {
-      width: 20px;
-      height: 20px;
+      width: 19px;
+      height: 19px;
       border-radius: 50%;
       background: #ffffff;
       transform: translateX(0);
       transition: transform 0.18s ease;
     }
     .toggle-track.active .toggle-thumb {
-      transform: translateX(22px);
+      transform: translateX(21px);
     }
 
     /* Clean Device Card */
     .device-card {
       background: #111827;
       border: 1px solid rgba(148, 163, 184, 0.14);
-      border-radius: 14px;
-      padding: 14px;
+      border-radius: 13px;
+      padding: 11px 13px;
       display: flex;
       flex-direction: column;
-      gap: 11px;
+      gap: 9px;
     }
     .field-header {
       display: flex;
@@ -173,18 +176,18 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     .radius-section {
       background: #111827;
       border: 1px solid rgba(148, 163, 184, 0.14);
-      border-radius: 14px;
-      padding: 12px 14px;
+      border-radius: 13px;
+      padding: 10px 13px;
     }
     .segmented-bar {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 4px;
       background: #090d16;
-      padding: 4px;
-      border-radius: 10px;
+      padding: 3.5px;
+      border-radius: 9px;
       border: 1px solid rgba(148, 163, 184, 0.12);
-      margin-top: 6px;
+      margin-top: 5px;
     }
     .seg-btn {
       background: transparent;
@@ -192,8 +195,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       color: #94a3b8;
       font-size: 11px;
       font-weight: 600;
-      padding: 6px 4px;
-      border-radius: 7px;
+      padding: 5.5px 4px;
+      border-radius: 6px;
       cursor: pointer;
       transition: all 0.15s ease;
     }
@@ -207,7 +210,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       gap: 8px;
       font-size: 10px;
       color: #64748b;
-      margin-top: 8px;
+      margin-top: 6px;
     }
     input[type="range"] {
       flex: 1;
@@ -220,8 +223,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     .meter-card {
       background: #111827;
       border: 1px solid rgba(148, 163, 184, 0.14);
-      border-radius: 14px;
-      padding: 12px 14px;
+      border-radius: 13px;
+      padding: 10px 13px;
     }
     .meter-header {
       display: flex;
@@ -229,7 +232,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       align-items: center;
       font-size: 11px;
       color: #94a3b8;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .gate-state {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -239,10 +242,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     }
     canvas {
       width: 100%;
-      height: 82px;
+      height: 74px;
       display: block;
       background: #090d16;
-      border-radius: 9px;
+      border-radius: 8px;
       border: 1px solid rgba(148, 163, 184, 0.12);
     }
     .meter-footer {
@@ -250,16 +253,16 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       justify-content: space-between;
       font-size: 10px;
       color: #64748b;
-      margin-top: 7px;
+      margin-top: 6px;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
 
     /* Single Quiet Self-Test Button */
     .test-btn {
       width: 100%;
-      padding: 10px 12px;
-      border-radius: 11px;
-      font-size: 11.5px;
+      padding: 8.5px 12px;
+      border-radius: 10px;
+      font-size: 11px;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid rgba(148, 163, 184, 0.18);
@@ -281,15 +284,17 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding-top: 6px;
-      margin-top: 2px;
+      padding-top: 4px;
+      padding-bottom: 0;
+      margin-top: 0;
       border-top: 1px solid rgba(148, 163, 184, 0.1);
       font-size: 10px;
+      line-height: 1.2;
       color: #64748b;
     }
     .app-footer .heart-icon {
       color: #f43f5e;
-      font-size: 11px;
+      font-size: 10.5px;
       display: inline-block;
       margin: 0 1px;
     }
@@ -390,7 +395,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
   <!-- Copyright & Version Footer -->
   <div class="app-footer">
-    <span>&copy; Opung &middot; Made with <span class="heart-icon">&hearts;</span> <span class="author-name">Muhammad Zen</span></span>
+    <span>&copy; 2026 Opung &middot; Made with <span class="heart-icon">&hearts;</span> <span class="author-name">Muhammad Zen</span></span>
     <span class="ver-badge">Versi 1.0</span>
   </div>
 
@@ -641,6 +646,18 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         } catch (_e) {}
       }
     }
+
+    function fitNativeWindowHeight() {
+      const h = document.body ? document.body.offsetHeight : 0;
+      if (h > 400) {
+        sendNativeBridgeCommand('HEIGHT:' + h);
+      }
+    }
+    window.addEventListener('DOMContentLoaded', fitNativeWindowHeight);
+    window.addEventListener('load', () => {
+      fitNativeWindowHeight();
+      setTimeout(fitNativeWindowHeight, 120);
+    });
 
     function isDeprecatedOpungDriverLabel(label) {
       const l = (label || '').toLowerCase();
@@ -1655,6 +1672,23 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     if (![message.body isKindOfClass:[NSString class]]) return;
 
     NSString *body = (NSString *)message.body;
+    if ([body hasPrefix:@"HEIGHT:"]) {
+        CGFloat h = [[body substringFromIndex:7] doubleValue];
+        if (h >= 420.0 && h <= 700.0 && self.window) {
+            NSRect oldFrame = self.window.frame;
+            NSRect contentRect = [self.window contentRectForFrameRect:oldFrame];
+            CGFloat deltaH = ceil(h) - contentRect.size.height;
+            if (fabs(deltaH) > 1.0) {
+                contentRect.size.height = ceil(h);
+                contentRect.size.width = 390.0;
+                NSRect newFrame = [self.window frameRectForContentRect:contentRect];
+                newFrame.origin.x = oldFrame.origin.x;
+                newFrame.origin.y = oldFrame.origin.y - (newFrame.size.height - oldFrame.size.height);
+                [self.window setFrame:newFrame display:YES animate:NO];
+            }
+        }
+        return;
+    }
     if ([body hasPrefix:@"SINK:"]) {
         if ([body isEqualToString:@"SINK:ON"]) {
             gSinkEnabled = 1;
@@ -1826,7 +1860,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
         [NSApp setApplicationIconImage:appIcon];
     }
 
-    NSRect frame = NSMakeRect(0, 0, 390, 645);
+    NSRect frame = NSMakeRect(0, 0, 390, 526);
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
     self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:style backing:NSBackingStoreBuffered defer:NO];
     [self.window setTitle:@"Opung - Office Proximity Ultra Noise Gate"];
@@ -1932,7 +1966,7 @@ function run(argv) {
   const app = $.NSApplication.sharedApplication;
   app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
 
-  const rect = $.NSMakeRect(0, 0, 390, 645);
+  const rect = $.NSMakeRect(0, 0, 390, 526);
   const styleMask = (1 << 0) | (1 << 1) | (1 << 2);
   const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
     rect,
@@ -2156,7 +2190,7 @@ launch_native_detached() {
   local BIN_PATH="$1"
   local HTML_ARG="$2"
 
-  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 RNNoiseStudioNativeV15 RNNoiseStudioNativeV16 2>/dev/null || true
+  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 RNNoiseStudioNativeV14 RNNoiseStudioNativeV15 RNNoiseStudioNativeV16 RNNoiseStudioNativeV17 2>/dev/null || true
 
   if [ -x "/usr/bin/perl" ]; then
     /usr/bin/perl -MPOSIX -e '
@@ -2186,10 +2220,10 @@ launch_native_detached() {
 SHADOW_BUNDLE="/tmp/OPUNG-Runtime-$(id -u)/OPUNG.app"
 SHADOW_MACOS_DIR="$SHADOW_BUNDLE/Contents/MacOS"
 SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
-SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV16"
-LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV16"
+SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV17"
+LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV17"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary V16 sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V17 sudah ada di bundle lokal atau di /tmp shadow bundle
 if [ -x "$LOCAL_BIN" ]; then
   launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi
