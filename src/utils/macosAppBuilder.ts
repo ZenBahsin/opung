@@ -432,7 +432,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         this.smoothedGain = 0.0;
       }
 
-      processFrame480(frame, thresholdDb) {
+      processFrame480(frame, thresholdDb, isLoopbackTest = false) {
         let vocalBandEnergy = 0;
         let totalEnergy = 0;
         let zeroCrossings = 0;
@@ -470,10 +470,25 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
         this.lastFrameDb = Math.round(frameDb);
 
+        // Anti-Cave-Echo Guard saat Tes Dengar Suara Sendiri aktif:
+        // Pantulan speaker yang datang ~120ms kemudian memiliki energi lebih rendah dari puncak suara asli,
+        // sehingga ditahan agar tidak memicu ulang gerbang (mencegah efek gema berulang seperti di goa).
+        if (this.echoGuardDecayDb === undefined) {
+          this.echoGuardDecayDb = -80.0;
+        }
+        this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);
+        const effectiveThresholdDb = isLoopbackTest
+          ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)
+          : thresholdDb;
+        const activeHoldFrames = isLoopbackTest ? 9 : this.holdFrames;
+
         let targetGain = 0.0;
-        if (frameDb >= thresholdDb) {
+        if (frameDb >= effectiveThresholdDb) {
           targetGain = 1.0;
-          this.holdCounter = this.holdFrames;
+          this.holdCounter = activeHoldFrames;
+          if (frameDb > this.echoGuardDecayDb) {
+            this.echoGuardDecayDb = frameDb;
+          }
         } else if (this.holdCounter > 0) {
           this.holdCounter--;
           targetGain = 1.0;
@@ -510,7 +525,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         }
       }
 
-      processAudioBlock(inputBuffer, outputBuffer, enabled, thresholdDb) {
+      processAudioBlock(inputBuffer, outputBuffer, enabled, thresholdDb, isLoopbackTest = false) {
         if (!enabled) {
           this.wasEnabled = false;
           outputBuffer.set(inputBuffer);
@@ -525,7 +540,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         this.inputRing.pushScaled(inputBuffer, inputBuffer.length, PCM16_SCALE);
         while (this.inputRing.available >= RNNOISE_FRAME_SIZE) {
           this.inputRing.pullScaled(this.frame480, 0, RNNOISE_FRAME_SIZE, 1.0);
-          this.processFrame480(this.frame480, thresholdDb);
+          this.processFrame480(this.frame480, thresholdDb, isLoopbackTest);
           this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
         }
         if (!this.outputRing.pullScaled(outputBuffer, 0, outputBuffer.length, 1.0 / PCM16_SCALE)) {
@@ -566,26 +581,38 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let audioCtx = null;
     let rawAnalyser = null;
     let cleanAnalyser = null;
+    let activeMakeupGainNode = null;
     let dspCore = new NearFieldRNNoiseDspCore();
     let currentMicStream = null;
     let currentCleanStream = null;
+    let selectedVirtualSinkId = '';
+    let nativeCoreAudioSinkActive = false;
 
-    function syncMicEchoCancellationConstraint() {
-      if (!currentMicStream) return;
-      const track = currentMicStream.getAudioTracks()[0];
-      if (track && typeof track.applyConstraints === 'function') {
-        track.applyConstraints({
-          echoCancellation: !loopbackAudible,
-          noiseSuppression: true,
-          autoGainControl: false,
-        }).catch(() => {});
+    function hasNativeCoreAudioBridge() {
+      return Boolean(
+        window.webkit &&
+        window.webkit.messageHandlers &&
+        window.webkit.messageHandlers.opungAudioBridge
+      );
+    }
+
+    function sendNativeBridgeCommand(cmd) {
+      if (hasNativeCoreAudioBridge()) {
+        try {
+          window.webkit.messageHandlers.opungAudioBridge.postMessage(cmd);
+        } catch (_e) {}
       }
+    }
+
+    function isDeprecatedOpungDriverLabel(label) {
+      const l = (label || '').toLowerCase();
+      return l.includes('opung');
     }
 
     function isVirtualCableLabel(label) {
       const l = (label || '').toLowerCase();
+      if (isDeprecatedOpungDriverLabel(l)) return false;
       return (
-        l.includes('opung') ||
         l.includes('blackhole') ||
         l.includes('vb-cable') ||
         l.includes('soundflower') ||
@@ -595,14 +622,23 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       );
     }
 
-    function isOpungOrBlackHoleInputLabel(label) {
+    function isAnyVirtualOrDeprecatedInputLabel(label) {
       const l = (label || '').toLowerCase();
-      return l.includes('opung') || l.includes('blackhole');
+      return (
+        l.includes('opung') ||
+        l.includes('blackhole') ||
+        l.includes('vb-cable') ||
+        l.includes('soundflower') ||
+        l.includes('loopback') ||
+        l.includes('existential') ||
+        l.includes('virtual') ||
+        l.includes('aggregate')
+      );
     }
 
     function isPhysicalSpeakerOrEarphoneLabel(label) {
       const l = (label || '').toLowerCase();
-      if (isVirtualCableLabel(l)) return false;
+      if (isAnyVirtualOrDeprecatedInputLabel(l)) return false;
       return (
         l.includes('headphone') ||
         l.includes('earphone') ||
@@ -614,6 +650,35 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         l.includes('displayport') ||
         l.includes('bluetooth')
       );
+    }
+
+    function pickBestPhysicalInputDevice(inputs, requestedId) {
+      const physicalInputs = inputs.filter(
+        (d) =>
+          d.kind === 'audioinput' &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isAnyVirtualOrDeprecatedInputLabel(d.label)
+      );
+      if (
+        requestedId &&
+        requestedId !== 'default' &&
+        requestedId !== 'communications'
+      ) {
+        const exactMatch = physicalInputs.find((d) => d.deviceId === requestedId);
+        if (exactMatch) return exactMatch;
+      }
+      const builtInMatch = physicalInputs.find((d) => {
+        const l = (d.label || '').toLowerCase();
+        return (
+          l.includes('macbook') ||
+          l.includes('built-in') ||
+          l.includes('internal') ||
+          l.includes('mikrofon') ||
+          l.includes('microphone')
+        );
+      });
+      return builtInMatch || physicalInputs[0] || null;
     }
 
     function updateThresholdUI(db) {
@@ -648,14 +713,56 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       }
     });
 
-    loopbackBtn.addEventListener('click', () => {
+    async function routeEarphoneLoopbackToPhysicalDevice() {
+      try {
+        if (typeof earphoneLoopbackOut.setSinkId !== 'function') return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const outputs = devices.filter(
+          (d) =>
+            d.kind === 'audiooutput' &&
+            d.deviceId !== 'default' &&
+            d.deviceId !== 'communications' &&
+            !isAnyVirtualOrDeprecatedInputLabel(d.label)
+        );
+        const headphoneOut = outputs.find((d) => {
+          const l = (d.label || '').toLowerCase();
+          return (
+            l.includes('headphone') ||
+            l.includes('earphone') ||
+            l.includes('airpods') ||
+            l.includes('bluetooth')
+          );
+        });
+        const physicalOut =
+          headphoneOut ||
+          outputs.find((d) => isPhysicalSpeakerOrEarphoneLabel(d.label)) ||
+          outputs[0];
+        if (physicalOut && physicalOut.deviceId) {
+          await earphoneLoopbackOut.setSinkId(physicalOut.deviceId).catch(() => {});
+        }
+      } catch (_e) {}
+    }
+
+    loopbackBtn.addEventListener('click', async () => {
       loopbackAudible = !loopbackAudible;
-      syncMicEchoCancellationConstraint();
+      // PENTING: JANGAN PERNAH mematikan echoCancellation saat Tes Dengar Suara Sendiri!
+      // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
+      if (activeMakeupGainNode && audioCtx) {
+        activeMakeupGainNode.gain.setTargetAtTime(
+          loopbackAudible ? 0.85 : 1.35,
+          audioCtx.currentTime,
+          0.02
+        );
+      }
       if (loopbackAudible) {
+        if (audioCtx && audioCtx.state === 'suspended') {
+          await audioCtx.resume().catch(() => {});
+        }
+        await routeEarphoneLoopbackToPhysicalDevice();
         if (currentCleanStream) {
           earphoneLoopbackOut.srcObject = currentCleanStream;
         }
-        earphoneLoopbackOut.volume = 1.0;
+        earphoneLoopbackOut.volume = 0.68;
         earphoneLoopbackOut.muted = false;
         earphoneLoopbackOut.play().catch(() => {});
         loopbackBtn.className = 'test-btn on';
@@ -671,9 +778,11 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     });
 
     async function applyOutputSink(sinkId) {
+      selectedVirtualSinkId = sinkId || '';
       virtualCableAudioOut.muted = true;
       virtualCableAudioOut.volume = 0;
       virtualCableAudioOut.pause();
+      virtualCableAudioOut.srcObject = null;
 
       if (
         !sinkId ||
@@ -681,35 +790,50 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         sinkId === 'communications' ||
         sinkId === 'coreaudio-default'
       ) {
-        virtualCableAudioOut.srcObject = null;
+        nativeCoreAudioSinkActive = false;
+        sendNativeBridgeCommand('SINK:OFF');
         sinkBadge.textContent = 'Siaga (Earphone Aman)';
         sinkBadge.style.color = '#94a3b8';
         return;
       }
 
+      if (audioCtx && audioCtx.state === 'suspended') {
+        await audioCtx.resume().catch(() => {});
+      }
+
+      // Jika berjalan di dalam aplikasi native OPUNG.app, jembatan CoreAudio HAL langsung menulis ke BlackHole 2ch!
+      if (hasNativeCoreAudioBridge()) {
+        nativeCoreAudioSinkActive = true;
+        sendNativeBridgeCommand('SINK:ON');
+      }
+
       try {
-        if (typeof virtualCableAudioOut.setSinkId === 'function') {
+        if (
+          sinkId !== 'native-blackhole-2ch' &&
+          typeof virtualCableAudioOut.setSinkId === 'function'
+        ) {
           await virtualCableAudioOut.setSinkId(sinkId);
-          if (currentCleanStream) {
+          if (!hasNativeCoreAudioBridge() && currentCleanStream) {
             virtualCableAudioOut.srcObject = currentCleanStream;
+            virtualCableAudioOut.volume = 1.0;
+            virtualCableAudioOut.muted = false;
+            await virtualCableAudioOut.play().catch(() => {});
           }
-          virtualCableAudioOut.volume = 1.0;
-          virtualCableAudioOut.muted = false;
-          await virtualCableAudioOut.play().catch(() => {});
-        } else if (audioCtx && typeof audioCtx.setSinkId === 'function') {
-          await audioCtx.setSinkId(sinkId);
         }
-        const selOpt = virtualOutputSelect.options[virtualOutputSelect.selectedIndex];
-        const isOpungMic = selOpt && selOpt.textContent && selOpt.textContent.toLowerCase().includes('opung');
-        sinkBadge.textContent = isOpungMic ? 'Terhubung ke OPUNG Mic ✓' : 'Terhubung ke Virtual Mic ✓';
+        sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
         sinkBadge.style.color = '#34d399';
       } catch (err) {
-        virtualCableAudioOut.muted = true;
-        virtualCableAudioOut.volume = 0;
-        virtualCableAudioOut.pause();
-        virtualCableAudioOut.srcObject = null;
-        sinkBadge.textContent = 'Siaga';
-        sinkBadge.style.color = '#94a3b8';
+        if (nativeCoreAudioSinkActive) {
+          sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
+          sinkBadge.style.color = '#34d399';
+        } else {
+          virtualCableAudioOut.muted = true;
+          virtualCableAudioOut.volume = 0;
+          virtualCableAudioOut.pause();
+          virtualCableAudioOut.srcObject = null;
+          sinkBadge.textContent = 'Siaga';
+          sinkBadge.style.color = '#94a3b8';
+        }
       }
     }
 
@@ -727,6 +851,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         if (audioCtx && audioCtx.state === 'suspended') {
           await audioCtx.resume().catch(() => {});
         }
+        sendNativeBridgeCommand('SINK:ON');
         await populateMacAudioDevices(micInputSelect.value);
       });
     }
@@ -740,38 +865,50 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     async function populateMacAudioDevices(activeInputDeviceId, activeTrackLabel) {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devices.filter((d) => d.kind === 'audioinput');
+      const allInputs = devices.filter((d) => d.kind === 'audioinput');
+      // Saring ketat agar BlackHole 2ch / OPUNG Microphone TIDAK PERNAH muncul di dropdown Input Fisik!
+      const physicalInputs = allInputs.filter(
+        (d) =>
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isAnyVirtualOrDeprecatedInputLabel(d.label)
+      );
+      const inputsToDisplay = physicalInputs.length > 0 ? physicalInputs : allInputs.filter((d) => !isAnyVirtualOrDeprecatedInputLabel(d.label));
+
+      // Saring output: Hilangkan OPUNG Microphone duplikat, cukup 1 virtual mic resmi yaitu BlackHole 2ch!
       const outputs = devices.filter(
         (d) =>
           d.kind === 'audiooutput' &&
           d.deviceId !== 'default' &&
-          d.deviceId !== 'communications'
+          d.deviceId !== 'communications' &&
+          !isDeprecatedOpungDriverLabel(d.label)
       );
 
       micInputSelect.innerHTML = '';
-      inputs.forEach((d, idx) => {
+      inputsToDisplay.forEach((d, idx) => {
         const opt = document.createElement('option');
         opt.value = d.deviceId;
         const resolvedLabel =
           d.label ||
-          (idx === 0 && activeTrackLabel ? activeTrackLabel : '') ||
+          (idx === 0 && activeTrackLabel && !isAnyVirtualOrDeprecatedInputLabel(activeTrackLabel)
+            ? activeTrackLabel
+            : '') ||
           (d.deviceId && d.deviceId !== 'default'
-            ? 'Mikrofon MacBook (' + d.deviceId.slice(0, 6) + ')'
+            ? 'Mikrofon Fisik MacBook (' + d.deviceId.slice(0, 6) + ')'
             : 'Mikrofon Internal MacBook');
-        const isVirtIn = isOpungOrBlackHoleInputLabel(resolvedLabel);
-        opt.textContent = isVirtIn
-          ? resolvedLabel + ' (Jangan Pilih Sebagai Input Fisik)'
-          : resolvedLabel;
+        opt.textContent = resolvedLabel;
         micInputSelect.appendChild(opt);
       });
-      if (activeInputDeviceId) {
+      if (activeInputDeviceId && inputsToDisplay.some((d) => d.deviceId === activeInputDeviceId)) {
         micInputSelect.value = activeInputDeviceId;
+      } else if (inputsToDisplay.length > 0) {
+        micInputSelect.value = inputsToDisplay[0].deviceId;
       }
 
       if (
         labelRetryCount < 4 &&
-        inputs.length > 0 &&
-        inputs.every((d) => !d.label || d.label.trim() === '')
+        allInputs.length > 0 &&
+        allInputs.every((d) => !d.label || d.label.trim() === '')
       ) {
         labelRetryCount++;
         setTimeout(() => {
@@ -782,20 +919,20 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       virtualOutputSelect.innerHTML = '';
       const emptyOpt = document.createElement('option');
       emptyOpt.value = '';
-      emptyOpt.textContent = 'Pilih OPUNG Microphone / BlackHole 2ch (Siaga)';
+      emptyOpt.textContent = 'Siaga (Jangan Kirim ke Meet)';
       virtualOutputSelect.appendChild(emptyOpt);
 
-      let preferredVirtualSinkId = null;
+      let blackHoleSinkId = null;
       outputs.forEach((d) => {
         const opt = document.createElement('option');
         opt.value = d.deviceId;
         const isVirt = isVirtualCableLabel(d.label);
         const isPhys = isPhysicalSpeakerOrEarphoneLabel(d.label);
         if (isVirt) {
-          if (!preferredVirtualSinkId || (d.label && d.label.toLowerCase().includes('opung'))) {
-            preferredVirtualSinkId = d.deviceId;
+          if (!blackHoleSinkId || (d.label && d.label.toLowerCase().includes('blackhole'))) {
+            blackHoleSinkId = d.deviceId;
           }
-          opt.textContent = d.label + ' (Mikrofon Virtual Meet/Zoom)';
+          opt.textContent = d.label + ' (Aktif untuk Google Meet / Zoom)';
         } else if (isPhys) {
           opt.disabled = true;
           opt.textContent = d.label + ' (Speaker/Earphone Fisik - Diblokir)';
@@ -805,9 +942,24 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         virtualOutputSelect.appendChild(opt);
       });
 
-      if (preferredVirtualSinkId) {
-        virtualOutputSelect.value = preferredVirtualSinkId;
-        await applyOutputSink(preferredVirtualSinkId);
+      // Jika di dalam WKWebView macOS belum mengekspos daftar audiooutput tetapi jembatan CoreAudio melihat BlackHole 2ch:
+      if (!blackHoleSinkId && hasNativeCoreAudioBridge()) {
+        const nativeOpt = document.createElement('option');
+        nativeOpt.value = 'native-blackhole-2ch';
+        nativeOpt.textContent = 'BlackHole 2ch (Aktif untuk Google Meet / Zoom)';
+        virtualOutputSelect.appendChild(nativeOpt);
+        blackHoleSinkId = 'native-blackhole-2ch';
+      }
+
+      const targetSink =
+        (selectedVirtualSinkId &&
+          Array.from(virtualOutputSelect.options).some((o) => o.value === selectedVirtualSinkId && !o.disabled)
+          ? selectedVirtualSinkId
+          : null) || blackHoleSinkId;
+
+      if (targetSink) {
+        virtualOutputSelect.value = targetSink;
+        await applyOutputSink(targetSink);
       } else {
         virtualOutputSelect.value = '';
         await applyOutputSink('');
@@ -823,50 +975,75 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           await audioCtx.close().catch(() => {});
         }
 
+        // 1. Cek daftar perangkat sebelum getUserMedia agar tidak pernah membuka 'default' jika 'default' adalah BlackHole 2ch!
         let targetInputId = selectedInputId;
-        const useHardwareAec = !loopbackAudible;
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+          const preDevs = await navigator.mediaDevices.enumerateDevices();
+          const bestPreMic = pickBestPhysicalInputDevice(preDevs, targetInputId);
+          if (bestPreMic && bestPreMic.deviceId) {
+            targetInputId = bestPreMic.deviceId;
+          }
+        }
 
         let stream;
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             audio: {
-              deviceId: targetInputId ? { exact: targetInputId } : undefined,
+              deviceId:
+                targetInputId && targetInputId !== 'default' && targetInputId !== 'communications'
+                  ? { exact: targetInputId }
+                  : undefined,
               sampleRate: { ideal: 48000 },
               channelCount: { ideal: 1 },
-              echoCancellation: useHardwareAec,
+              echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: false,
             },
           });
         } catch (_firstErr) {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: false,
+            },
+          });
         }
 
+        // 2. Setelah izin mikrofon terbuka, pastikan 100% kita membaca dari Mikrofon Fisik MacBook (BUKAN BlackHole 2ch / Default)!
         let firstTrack = stream.getAudioTracks()[0];
-        if (firstTrack && firstTrack.label && isOpungOrBlackHoleInputLabel(firstTrack.label)) {
-          const allDevs = await navigator.mediaDevices.enumerateDevices();
-          const realMic = allDevs.find(
-            (d) =>
-              d.kind === 'audioinput' &&
-              d.label &&
-              !isOpungOrBlackHoleInputLabel(d.label) &&
-              d.deviceId !== 'default'
-          );
-          if (realMic) {
-            stream.getTracks().forEach((t) => t.stop());
-            targetInputId = realMic.deviceId;
-            stream = await navigator.mediaDevices.getUserMedia({
+        const allDevsAfter = await navigator.mediaDevices.enumerateDevices();
+        const bestPhysicalMic = pickBestPhysicalInputDevice(allDevsAfter, targetInputId);
+        const currentTrackDeviceId =
+          firstTrack && typeof firstTrack.getSettings === 'function'
+            ? firstTrack.getSettings().deviceId
+            : '';
+        const isCurrentTrackVirtual =
+          firstTrack && firstTrack.label && isAnyVirtualOrDeprecatedInputLabel(firstTrack.label);
+
+        if (
+          bestPhysicalMic &&
+          (isCurrentTrackVirtual ||
+            !targetInputId ||
+            targetInputId === 'default' ||
+            (currentTrackDeviceId && currentTrackDeviceId !== bestPhysicalMic.deviceId && !selectedInputId))
+        ) {
+          try {
+            const exactStream = await navigator.mediaDevices.getUserMedia({
               audio: {
-                deviceId: { exact: realMic.deviceId },
+                deviceId: { exact: bestPhysicalMic.deviceId },
                 sampleRate: { ideal: 48000 },
                 channelCount: { ideal: 1 },
-                echoCancellation: useHardwareAec,
+                echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: false,
               },
             });
+            stream.getTracks().forEach((t) => t.stop());
+            stream = exactStream;
+            targetInputId = bestPhysicalMic.deviceId;
             firstTrack = stream.getAudioTracks()[0];
-          }
+          } catch (_switchErr) {}
         }
 
         currentMicStream = stream;
@@ -936,7 +1113,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         studioCompressor.release.value = 0.15;
 
         const makeupGainNode = audioCtx.createGain();
-        makeupGainNode.gain.value = 1.25;
+        makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.35;
+        activeMakeupGainNode = makeupGainNode;
 
         const processorNode = audioCtx.createScriptProcessor(512, 1, 1);
         dspCore = new NearFieldRNNoiseDspCore();
@@ -944,11 +1122,50 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         processorNode.onaudioprocess = (ev) => {
           const inBuf = ev.inputBuffer.getChannelData(0);
           const outBuf = ev.outputBuffer.getChannelData(0);
-          dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb);
+          dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
           hardGateGain.gain.value = (isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0) ? 0.0 : 1.0;
         };
 
+        // Jembatan PCM 48kHz pasca-EQ ke CoreAudio HAL Output (BlackHole 2ch) saat berjalan di OPUNG.app:
+        const nativeOutBridgeNode = audioCtx.createScriptProcessor(512, 1, 1);
+        const pcm16Scratch = new Int16Array(512);
+        const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
+        nativeOutBridgeNode.onaudioprocess = (ev) => {
+          const cleanIn = ev.inputBuffer.getChannelData(0);
+          const dummyOut = ev.outputBuffer.getChannelData(0);
+          for (let i = 0; i < cleanIn.length; i++) {
+            dummyOut[i] = 0;
+          }
+          if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
+            for (let i = 0; i < cleanIn.length; i++) {
+              const s = Math.max(-1.0, Math.min(1.0, cleanIn[i]));
+              pcm16Scratch[i] = s < 0 ? s * 32768 : s * 32767;
+            }
+            let bin = '';
+            for (let j = 0; j < uint8Scratch.length; j++) {
+              bin += String.fromCharCode(uint8Scratch[j]);
+            }
+            sendNativeBridgeCommand(btoa(bin));
+          }
+        };
+
         const cleanDest = audioCtx.createMediaStreamDestination();
+        try {
+          cleanDest.channelCount = 2;
+          cleanDest.channelCountMode = 'explicit';
+          cleanDest.channelInterpretation = 'speakers';
+        } catch (_e) {}
+
+        // Sub-audible Pilot (-96 dBFS @ 20Hz) agar Chrome/WebKit tidak pernah menidurkan stream BlackHole 2ch:
+        const pilotOsc = audioCtx.createOscillator();
+        pilotOsc.type = 'sine';
+        pilotOsc.frequency.value = 20;
+        const pilotGain = audioCtx.createGain();
+        pilotGain.gain.value = 0.000015;
+        pilotOsc.connect(pilotGain);
+        pilotGain.connect(cleanDest);
+        pilotOsc.start();
+
         const keepAliveGain = audioCtx.createGain();
         keepAliveGain.gain.value = 0.0;
 
@@ -965,14 +1182,17 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         makeupGainNode.connect(hardGateGain);
         hardGateGain.connect(cleanAnalyser);
         cleanAnalyser.connect(cleanDest);
+        cleanAnalyser.connect(nativeOutBridgeNode);
+        nativeOutBridgeNode.connect(keepAliveGain);
         cleanAnalyser.connect(keepAliveGain);
         keepAliveGain.connect(audioCtx.destination);
 
         currentCleanStream = cleanDest.stream;
 
         if (loopbackAudible) {
+          await routeEarphoneLoopbackToPhysicalDevice();
           earphoneLoopbackOut.srcObject = currentCleanStream;
-          earphoneLoopbackOut.volume = 1.0;
+          earphoneLoopbackOut.volume = 0.68;
           earphoneLoopbackOut.muted = false;
           await earphoneLoopbackOut.play().catch(() => {});
         } else {
@@ -998,6 +1218,14 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         () => {
           if (audioCtx && audioCtx.state === 'suspended') {
             audioCtx.resume().catch(() => {});
+          }
+          if (
+            !hasNativeCoreAudioBridge() &&
+            selectedVirtualSinkId &&
+            virtualCableAudioOut.srcObject &&
+            virtualCableAudioOut.paused
+          ) {
+            virtualCableAudioOut.play().catch(() => {});
           }
         },
         { passive: true }
@@ -1082,23 +1310,211 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 </html>`;
 
 /**
- * Kode Objective-C Native macOS Cocoa + WebKit (NSStatusItem Menu Bar + NSWindow + WKWebView)
+ * Kode Objective-C Native macOS Cocoa + WebKit + CoreAudio HAL Output Bridge:
  * - Menampilkan ikon "OPUNG" di Menu Bar kanan atas macOS (dekat Wi-Fi/Baterai/Jam) persis seperti Krisp.ai!
- * - Saat pertama dibuka, jendela muncul tepat di tengah layar (center) agar langsung terlihat jelas.
- * - Memastikan izin mikrofon AVFoundation aktif sebelum memuat antarmuka WebKit agar seluruh mikrofon terdeteksi.
+ * - Menyediakan jembatan langsung CoreAudio HAL Output (`kAudioUnitSubType_HALOutput`) ke `BlackHole 2ch`
+ *   sehingga audio 48kHz yang telah dijernihkan pasti masuk ke Google Meet / Zoom di seluruh versi macOS!
  */
 export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <CoreAudio/CoreAudio.h>
+#import <AudioToolbox/AudioToolbox.h>
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
+#define OPUNG_RING_SIZE 65536
+#define OPUNG_RING_MASK (OPUNG_RING_SIZE - 1)
+
+static float gBlackHoleRing[OPUNG_RING_SIZE];
+static volatile uint32_t gRingReadIdx = 0;
+static volatile uint32_t gRingWriteIdx = 0;
+static volatile int gSinkEnabled = 1;
+
+static AudioDeviceID findBlackHoleAudioDeviceID(void) {
+    AudioObjectPropertyAddress propAddr = {
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+        0
+    };
+    UInt32 dataSize = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &propAddr, 0, NULL, &dataSize) != noErr || dataSize == 0) {
+        return kAudioObjectUnknown;
+    }
+    UInt32 count = dataSize / sizeof(AudioDeviceID);
+    AudioDeviceID *devices = (AudioDeviceID *)malloc(dataSize);
+    if (!devices) return kAudioObjectUnknown;
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &propAddr, 0, NULL, &dataSize, devices) != noErr) {
+        free(devices);
+        return kAudioObjectUnknown;
+    }
+
+    AudioDeviceID foundID = kAudioObjectUnknown;
+    for (UInt32 i = 0; i < count; i++) {
+        AudioDeviceID devID = devices[i];
+        AudioObjectPropertyAddress streamAddr = {
+            kAudioDevicePropertyStreams,
+            kAudioObjectPropertyScopeOutput,
+            0
+        };
+        UInt32 streamSize = 0;
+        if (AudioObjectGetPropertyDataSize(devID, &streamAddr, 0, NULL, &streamSize) != noErr || streamSize == 0) {
+            continue;
+        }
+        CFStringRef cfName = NULL;
+        UInt32 nameSize = sizeof(CFStringRef);
+        AudioObjectPropertyAddress nameAddr = {
+            kAudioObjectPropertyName,
+            kAudioObjectPropertyScopeGlobal,
+            0
+        };
+        if (AudioObjectGetPropertyData(devID, &nameAddr, 0, NULL, &nameSize, &cfName) == noErr && cfName != NULL) {
+            NSString *name = (__bridge NSString *)cfName;
+            if ([[name lowercaseString] containsString:@"blackhole"]) {
+                foundID = devID;
+                CFRelease(cfName);
+                break;
+            }
+            CFRelease(cfName);
+        }
+    }
+    free(devices);
+    return foundID;
+}
+
+static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
+                                             AudioUnitRenderActionFlags *ioActionFlags,
+                                             const AudioTimeStamp *inTimeStamp,
+                                             UInt32 inBusNumber,
+                                             UInt32 inNumberFrames,
+                                             AudioBufferList *ioData) {
+    if (!ioData) return noErr;
+    for (UInt32 f = 0; f < inNumberFrames; f++) {
+        float s = 0.0f;
+        uint32_t r = gRingReadIdx;
+        if (r != gRingWriteIdx && gSinkEnabled) {
+            s = gBlackHoleRing[r];
+            gRingReadIdx = (r + 1) & OPUNG_RING_MASK;
+        }
+        if (ioData->mNumberBuffers == 1) {
+            float *buf = (float *)ioData->mBuffers[0].mData;
+            UInt32 chans = ioData->mBuffers[0].mNumberChannels;
+            if (buf && chans > 0) {
+                for (UInt32 c = 0; c < chans; c++) {
+                    buf[f * chans + c] = s;
+                }
+            }
+        } else {
+            for (UInt32 b = 0; b < ioData->mNumberBuffers; b++) {
+                float *buf = (float *)ioData->mBuffers[b].mData;
+                if (buf) {
+                    buf[f] = s;
+                }
+            }
+        }
+    }
+    return noErr;
+}
+
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler>
 @property (strong, nonatomic) NSWindow *window;
 @property (strong, nonatomic) NSStatusItem *statusItem;
 @property (strong, nonatomic) WKWebView *webView;
 @property (copy, nonatomic) NSString *htmlFilePath;
+@property (assign, nonatomic) AudioComponentInstance blackHoleUnit;
+@property (assign, nonatomic) BOOL blackHoleRunning;
 @end
 
 @implementation AppDelegate
+
+- (void)startBlackHoleHalOutput {
+    if (self.blackHoleRunning) return;
+    AudioDeviceID bhID = findBlackHoleAudioDeviceID();
+    if (bhID == kAudioObjectUnknown) return;
+
+    AudioComponentDescription desc = {0};
+    desc.componentType = kAudioUnitType_Output;
+    desc.componentSubType = kAudioUnitSubType_HALOutput;
+    desc.componentManufacturer = kAudioUnitManufacturer_Apple;
+
+    AudioComponent comp = AudioComponentFindNext(NULL, &desc);
+    if (!comp) return;
+
+    AudioComponentInstance unit = NULL;
+    if (AudioComponentInstanceNew(comp, &unit) != noErr || !unit) return;
+
+    UInt32 enableIO = 1;
+    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &enableIO, sizeof(enableIO));
+    UInt32 disableInput = 0;
+    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &disableInput, sizeof(disableInput));
+
+    if (AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &bhID, sizeof(bhID)) != noErr) {
+        AudioComponentInstanceDispose(unit);
+        return;
+    }
+
+    AudioStreamBasicDescription asbd = {0};
+    asbd.mSampleRate = 48000.0;
+    asbd.mFormatID = kAudioFormatLinearPCM;
+    asbd.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    asbd.mFramesPerPacket = 1;
+    asbd.mChannelsPerFrame = 2;
+    asbd.mBitsPerChannel = 32;
+    asbd.mBytesPerPacket = 8;
+    asbd.mBytesPerFrame = 8;
+    AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &asbd, sizeof(asbd));
+
+    AURenderCallbackStruct cb = {0};
+    cb.inputProc = opungBlackHoleRenderCallback;
+    cb.inputProcRefCon = (__bridge void *)self;
+    AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof(cb));
+
+    if (AudioUnitInitialize(unit) == noErr) {
+        if (AudioOutputUnitStart(unit) == noErr) {
+            self.blackHoleUnit = unit;
+            self.blackHoleRunning = YES;
+            return;
+        }
+        AudioUnitUninitialize(unit);
+    }
+    AudioComponentInstanceDispose(unit);
+}
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.name isEqualToString:@"opungAudioBridge"]) return;
+    if (![message.body isKindOfClass:[NSString class]]) return;
+
+    NSString *body = (NSString *)message.body;
+    if ([body hasPrefix:@"SINK:"]) {
+        if ([body isEqualToString:@"SINK:ON"]) {
+            gSinkEnabled = 1;
+            if (!self.blackHoleRunning) {
+                [self startBlackHoleHalOutput];
+            }
+        } else {
+            gSinkEnabled = 0;
+        }
+        return;
+    }
+
+    if (!self.blackHoleRunning) {
+        [self startBlackHoleHalOutput];
+    }
+    NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:body options:0];
+    if (!pcmData || pcmData.length < 2) return;
+
+    const int16_t *samples = (const int16_t *)pcmData.bytes;
+    NSUInteger count = pcmData.length / sizeof(int16_t);
+    uint32_t w = gRingWriteIdx;
+    for (NSUInteger i = 0; i < count; i++) {
+        uint32_t nextW = (w + 1) & OPUNG_RING_MASK;
+        if (nextW == gRingReadIdx) {
+            gRingReadIdx = (gRingReadIdx + 256) & OPUNG_RING_MASK;
+        }
+        gBlackHoleRing[w] = ((float)samples[i]) / 32768.0f;
+        w = nextW;
+    }
+    gRingWriteIdx = w;
+}
 
 - (void)setupMainMenu {
     NSMenu *menubar = [[NSMenu alloc] init];
@@ -1173,6 +1589,7 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 }
 
 - (void)loadOpungInterface {
+    [self startBlackHoleHalOutput];
     NSError *err = nil;
     NSString *htmlContent = [NSString stringWithContentsOfFile:self.htmlFilePath encoding:NSUTF8StringEncoding error:&err];
     if (htmlContent && htmlContent.length > 0) {
@@ -1212,11 +1629,12 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     if (@available(macOS 10.12, *)) {
         config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
     }
-    @try {
-        [config.preferences setValue:@YES forKey:@"mediaDevicesEnabled"];
-        [config.preferences setValue:@NO forKey:@"mediaCaptureRequiresSecureConnection"];
-        [config.preferences setValue:@NO forKey:@"getUserMediaRequiresFocus"];
-    } @catch (NSException *exception) {}
+    [config.userContentController addScriptMessageHandler:self name:@"opungAudioBridge"];
+    @try { [config.preferences setValue:@YES forKey:@"mediaDevicesEnabled"]; } @catch (NSException *e) {}
+    @try { [config.preferences setValue:@NO forKey:@"mediaCaptureRequiresSecureConnection"]; } @catch (NSException *e) {}
+    @try { [config.preferences setValue:@NO forKey:@"getUserMediaRequiresFocus"]; } @catch (NSException *e) {}
+    @try { [config.preferences setValue:@YES forKey:@"exposeSpeakersEnabled"]; } @catch (NSException *e) {}
+    @try { [config.preferences setValue:@YES forKey:@"perElementSpeakerSelectionEnabled"]; } @catch (NSException *e) {}
 
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
     [self.webView setUIDelegate:(id)self];
@@ -1367,10 +1785,10 @@ function run(argv) {
 /**
  * Launcher Script Instan (< 0.1 detik) untuk Contents/MacOS/OPUNG & RNNoiseStudio:
  * - Otomatis menyalin OPUNG.app ke /Applications jika dibuka dari .DMG (/Volumes/...)
+ * - Otomatis membersihkan driver duplikat lama (/Library/Audio/Plug-Ins/HAL/OPUNG.driver) agar hanya ada
+ *   1 mikrofon virtual resmi ("BlackHole 2ch") tanpa bentrok UID di Google Meet / Zoom!
  * - Otomatis menjembatani izin mikrofon macOS TCC (Terminal Responsible Process Bridge) saat OPUNG.app
- *   diklik langsung di Finder / Applications, sehingga seluruh mikrofon fisik & OPUNG Microphone
- *   langsung muncul dan grafik spektrum suara bergerak real-time (sama persis seperti saat dibuka lewat
- *   Show Package Contents -> Contents/MacOS), sekaligus menutup jendela Terminal secara otomatis!
+ *   diklik langsung di Finder / Applications, sekaligus menutup jendela Terminal secara otomatis!
  */
 export const MACOS_NATIVE_LAUNCHER_SH = `#!/bin/bash
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$PATH"
@@ -1422,7 +1840,7 @@ EOF_BRIDGE
   fi
 fi
 
-# Cari compiler clang asli & SDK macOS (Tanpa memicu popup instalasi Xcode Command Line Tools)
+# Cari compiler clang asli & SDK macOS
 CLANG_REAL=""
 if [ -x "/Library/Developer/CommandLineTools/usr/bin/clang" ]; then
   CLANG_REAL="/Library/Developer/CommandLineTools/usr/bin/clang"
@@ -1439,12 +1857,21 @@ elif [ -d "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/
   SDK_ARGS=("-isysroot" "$SDKROOT")
 fi
 
-# 0C. OTOMATIS PASANG DRIVER VIRTUAL "OPUNG Microphone" (OPUNG.driver) DI LATAR BELAKANG JIKA BELUM ADA
-if [ ! -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
+# 0C. BERSIHKAN DRIVER DUPLIKAT "OPUNG.driver" AGAR HANYA ADA 1 VIRTUAL MIC ("BlackHole 2ch") TANPA BENTROK DI GOOGLE MEET
+if [ -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
   (
-    HAL_TMP="/tmp/opung-auto-hal-$$"
-    mkdir -p "$HAL_TMP/OPUNG.driver/Contents/MacOS"
-    cat << 'EOF_HAL_PLIST' > "$HAL_TMP/OPUNG.driver/Contents/Info.plist"
+    rm -rf "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" 2>/dev/null || \\
+      /usr/bin/osascript -e 'do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/OPUNG.driver && killall coreaudiod || true" with administrator privileges' 2>/dev/null || true
+    killall coreaudiod 2>/dev/null || true
+  ) </dev/null >/dev/null 2>&1 &
+fi
+
+# Jika BlackHole2ch.driver belum terpasang sama sekali di Mac pengguna, pasang BlackHole 2ch resmi:
+if [ ! -d "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver" ]; then
+  (
+    HAL_TMP="/tmp/opung-bh2ch-$$"
+    mkdir -p "$HAL_TMP/BlackHole2ch.driver/Contents/MacOS"
+    cat << 'EOF_BH_PLIST' > "$HAL_TMP/BlackHole2ch.driver/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1452,21 +1879,21 @@ if [ ! -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>OPUNG</string>
+  <string>BlackHole</string>
   <key>CFBundleIdentifier</key>
-  <string>com.opung.audio.driver</string>
+  <string>audio.existential.BlackHole2ch</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>OPUNG</string>
+  <string>BlackHole2ch</string>
   <key>CFBundleDisplayName</key>
-  <string>OPUNG Microphone</string>
+  <string>BlackHole 2ch</string>
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleShortVersionString</key>
-  <string>12.0.0</string>
+  <string>0.6.0</string>
   <key>CFBundleVersion</key>
-  <string>12000</string>
+  <string>600</string>
   <key>CFPlugInFactories</key>
   <dict>
     <key>e395c745-4eea-4d94-bb92-46224221047c</key>
@@ -1481,43 +1908,21 @@ if [ ! -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
   </dict>
 </dict>
 </plist>
-EOF_HAL_PLIST
-
-    BUILT_OK=0
+EOF_BH_PLIST
     if [ -n "$CLANG_REAL" ] && command -v curl >/dev/null 2>&1; then
       if curl -fsSL --max-time 10 "https://raw.githubusercontent.com/ExistentialAudio/BlackHole/master/BlackHole/BlackHole.c" -o "$HAL_TMP/BlackHole.c" 2>/dev/null; then
         "$CLANG_REAL" -bundle -O2 "\${SDK_ARGS[@]}" \\
           -framework CoreAudio -framework CoreFoundation \\
-          '-DkDriver_Name="OPUNG"' \\
-          '-DkPlugIn_BundleID="com.opung.audio.driver"' \\
-          '-DkDevice_Name="OPUNG Microphone"' \\
-          '-DkDevice2_Name="OPUNG Microphone"' \\
-          '-DkManufacturer_Name="OPUNG Audio AI"' \\
           '-DkNumber_Of_Channels=2' \\
           "$HAL_TMP/BlackHole.c" \\
-          -o "$HAL_TMP/OPUNG.driver/Contents/MacOS/OPUNG" 2>/dev/null && BUILT_OK=1 || true
+          -o "$HAL_TMP/BlackHole2ch.driver/Contents/MacOS/BlackHole" 2>/dev/null || true
       fi
     fi
-
-    if [ "$BUILT_OK" -eq 0 ] && [ -f "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver/Contents/MacOS/BlackHole" ]; then
-      cp -f "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver/Contents/MacOS/BlackHole" "$HAL_TMP/OPUNG.driver/Contents/MacOS/OPUNG"
-      perl -pi -e 's/BlackHole 2ch/OPUNG Mic 2ch/g' "$HAL_TMP/OPUNG.driver/Contents/MacOS/OPUNG" 2>/dev/null || true
-      BUILT_OK=1
-    fi
-
-    if [ "$BUILT_OK" -eq 1 ] && [ -f "$HAL_TMP/OPUNG.driver/Contents/MacOS/OPUNG" ]; then
-      chmod +x "$HAL_TMP/OPUNG.driver/Contents/MacOS/OPUNG"
-      /usr/bin/xattr -cr "$HAL_TMP/OPUNG.driver" 2>/dev/null || true
-      /usr/bin/codesign --force --deep --sign - "$HAL_TMP/OPUNG.driver" 2>/dev/null || true
-      cat << EOF_INST_HAL > "$HAL_TMP/install_hal.sh"
-#!/bin/bash
-rm -rf '/Library/Audio/Plug-Ins/HAL/OPUNG.driver'
-cp -R '$HAL_TMP/OPUNG.driver' '/Library/Audio/Plug-Ins/HAL/OPUNG.driver'
-chown -R root:wheel '/Library/Audio/Plug-Ins/HAL/OPUNG.driver'
-killall coreaudiod || true
-EOF_INST_HAL
-      chmod +x "$HAL_TMP/install_hal.sh"
-      /usr/bin/osascript -e "do shell script \\"/bin/bash '$HAL_TMP/install_hal.sh'\\" with administrator privileges" 2>/dev/null || true
+    if [ -f "$HAL_TMP/BlackHole2ch.driver/Contents/MacOS/BlackHole" ]; then
+      chmod +x "$HAL_TMP/BlackHole2ch.driver/Contents/MacOS/BlackHole"
+      /usr/bin/xattr -cr "$HAL_TMP/BlackHole2ch.driver" 2>/dev/null || true
+      /usr/bin/codesign --force --deep --sign - "$HAL_TMP/BlackHole2ch.driver" 2>/dev/null || true
+      /usr/bin/osascript -e "do shell script \\"cp -R '$HAL_TMP/BlackHole2ch.driver' '/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver' && chown -R root:wheel '/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver' && killall coreaudiod || true\\" with administrator privileges" 2>/dev/null || true
     fi
     rm -rf "$HAL_TMP" 2>/dev/null || true
   ) </dev/null >/dev/null 2>&1 &
@@ -1529,7 +1934,7 @@ launch_native_detached() {
   local BIN_PATH="$1"
   local HTML_ARG="$2"
 
-  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 2>/dev/null || true
+  killall -9 RNNoiseStudioNative RNNoiseStudioNativeV10 RNNoiseStudioNativeV11 RNNoiseStudioNativeV12 RNNoiseStudioNativeV13 2>/dev/null || true
 
   if [ -x "/usr/bin/perl" ]; then
     /usr/bin/perl -MPOSIX -e '
@@ -1559,10 +1964,10 @@ launch_native_detached() {
 SHADOW_BUNDLE="/tmp/OPUNG-Runtime-$(id -u)/OPUNG.app"
 SHADOW_MACOS_DIR="$SHADOW_BUNDLE/Contents/MacOS"
 SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
-SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV12"
-LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV12"
+SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV13"
+LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV13"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary V12 sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V13 sudah ada di bundle lokal atau di /tmp shadow bundle
 if [ -x "$LOCAL_BIN" ]; then
   launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi
@@ -1605,7 +2010,7 @@ if [ -n "$CLANG_REAL" ]; then
 EOF_ENT
 
   "$CLANG_REAL" -O0 -fobjc-arc "\${SDK_ARGS[@]}" \\
-    -framework Cocoa -framework WebKit -framework AVFoundation \\
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework CoreAudio -framework AudioToolbox \\
     "$APP_DIR/native_host.m" -o "$TMP_BIN" 2>/dev/null || true
 
   if [ -f "$TMP_BIN" ]; then
@@ -1635,9 +2040,8 @@ open "$HTML_FILE"
 /**
  * Generator Script 1-Klik untuk macOS:
  * 1. Memasang OPUNG.app (edisi Menu Bar seperti Krisp.ai) langsung ke /Applications/OPUNG.app
- * 2. Mengecek dan memasang driver virtual OPUNG Microphone (OPUNG.driver)
- * 3. Mencetak file Installer Wizard resmi "OPUNG-Installer.pkg" di Desktop (via pkgbuild)
- * 4. Mencetak file Disk Image resmi "OPUNG-Installer.dmg" di Desktop (via hdiutil)
+ * 2. Membersihkan OPUNG.driver lama & memastikan BlackHole 2ch aktif tanpa duplikat
+ * 3. Mencetak file Disk Image resmi "OPUNG-Installer.dmg" di Desktop (via hdiutil)
  */
 export function generateMacOSOneClickInstallerScript(): string {
   const base64HtmlPayload = btoa(
@@ -1652,27 +2056,23 @@ export function generateMacOSOneClickInstallerScript(): string {
 
   return `#!/bin/bash
 # ==============================================================================
-# OPUNG macOS — Auto-Installer (/Applications + OPUNG Virtual Mic + Menu Bar + .PKG + .DMG)
+# OPUNG macOS — Auto-Installer (/Applications + BlackHole 2ch + Menu Bar + .DMG)
 # ==============================================================================
 
 set -e
 
 echo "=================================================================="
-echo "🎙️ Memasang OPUNG (Menu Bar + OPUNG Virtual Mic) & Membuat .DMG/.PKG"
+echo "🎙️ Memasang OPUNG (Menu Bar + BlackHole 2ch) & Membuat .DMG"
 echo "=================================================================="
 
 APP_NAME="OPUNG"
 APP_BUNDLE="/Applications/\${APP_NAME}.app"
-HAL_BUILD_DIR="/tmp/opung-hal-driver-\$\$"
 DMG_STAGING="/tmp/opung-dmg-staging-\$\$"
-PKG_SCRIPTS_DIR="/tmp/opung-pkg-scripts-\$\$"
-PKG_OUTPUT="\$HOME/Desktop/OPUNG-Installer.pkg"
 DMG_OUTPUT="\$HOME/Desktop/OPUNG-Installer.dmg"
 
-rm -rf "\$APP_BUNDLE" "\$HAL_BUILD_DIR"
+rm -rf "\$APP_BUNDLE"
 mkdir -p "\$APP_BUNDLE/Contents/MacOS"
 mkdir -p "\$APP_BUNDLE/Contents/Resources/app"
-mkdir -p "\$HAL_BUILD_DIR/OPUNG.driver/Contents/MacOS"
 
 cat << 'EOF_PLIST' > "\$APP_BUNDLE/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1690,9 +2090,9 @@ cat << 'EOF_PLIST' > "\$APP_BUNDLE/Contents/Info.plist"
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>9.0.0</string>
+  <string>13.0.0</string>
   <key>CFBundleVersion</key>
-  <string>900</string>
+  <string>13000</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
@@ -1711,174 +2111,28 @@ cat << 'EOF_EXEC' > "\$APP_BUNDLE/Contents/MacOS/RNNoiseStudio"
 ${MACOS_NATIVE_LAUNCHER_SH}
 EOF_EXEC
 
-chmod +x "\$APP_BUNDLE/Contents/MacOS/RNNoiseStudio"
+cp -f "\$APP_BUNDLE/Contents/MacOS/RNNoiseStudio" "\$APP_BUNDLE/Contents/MacOS/OPUNG"
+chmod +x "\$APP_BUNDLE/Contents/MacOS/RNNoiseStudio" "\$APP_BUNDLE/Contents/MacOS/OPUNG"
 
-# Cari compiler clang native macOS
-CLANG_REAL=""
-if [ -x "/Library/Developer/CommandLineTools/usr/bin/clang" ]; then
-  CLANG_REAL="/Library/Developer/CommandLineTools/usr/bin/clang"
-elif [ -x "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" ]; then
-  CLANG_REAL="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+if [ -d "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ]; then
+  sudo rm -rf "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" 2>/dev/null || true
+  sudo killall coreaudiod 2>/dev/null || true
 fi
 
-SDK_ARGS=()
-if [ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" ]; then
-  export SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
-  SDK_ARGS=("-isysroot" "\$SDKROOT")
-elif [ -d "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" ]; then
-  export SDKROOT="/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-  SDK_ARGS=("-isysroot" "\$SDKROOT")
-fi
-
-# 1A. Kompilasi binary Mach-O Native (NSStatusItem Menu Bar + WKWebView)
-if [ -n "\$CLANG_REAL" ]; then
-  "\$CLANG_REAL" -O2 -fobjc-arc "\${SDK_ARGS[@]}" \\
-    -framework Cocoa -framework WebKit -framework AVFoundation \\
-    "\$APP_BUNDLE/Contents/Resources/app/native_host.m" \\
-    -o "\$APP_BUNDLE/Contents/MacOS/RNNoiseStudioNativeV10" 2>/dev/null || true
-  chmod +x "\$APP_BUNDLE/Contents/MacOS/RNNoiseStudioNativeV10" 2>/dev/null || true
-fi
-
-# 1B. Rakitan Driver CoreAudio Virtual Mic: "OPUNG Microphone" (OPUNG.driver)
-echo "🎙️ Merakit Driver CoreAudio Virtual: OPUNG Microphone (OPUNG.driver)..."
-cat << 'EOF_DRV_PLIST' > "\$HAL_BUILD_DIR/OPUNG.driver/Contents/Info.plist"
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleExecutable</key>
-  <string>OPUNG</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.opung.audio.driver</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>OPUNG</string>
-  <key>CFBundleDisplayName</key>
-  <string>OPUNG Microphone</string>
-  <key>CFBundlePackageType</key>
-  <string>BNDL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>9.0.0</string>
-  <key>CFBundleVersion</key>
-  <string>900</string>
-  <key>CFPlugInFactories</key>
-  <dict>
-    <key>e395c745-4eea-4d94-bb92-46224221047c</key>
-    <string>BlackHole_Create</string>
-  </dict>
-  <key>CFPlugInTypes</key>
-  <dict>
-    <key>443abab8-e7b3-491a-b985-beb9187030db</key>
-    <array>
-      <string>e395c745-4eea-4d94-bb92-46224221047c</string>
-    </array>
-  </dict>
-</dict>
-</plist>
-EOF_DRV_PLIST
-
-DRIVER_BUILT=0
-if [ -n "\$CLANG_REAL" ] && command -v curl >/dev/null 2>&1; then
-  if curl -fsSL --max-time 12 "https://raw.githubusercontent.com/ExistentialAudio/BlackHole/master/BlackHole/BlackHole.c" -o "\$HAL_BUILD_DIR/BlackHole.c" 2>/dev/null; then
-    "\$CLANG_REAL" -bundle -O2 "\${SDK_ARGS[@]}" \\
-      -framework CoreAudio -framework CoreFoundation \\
-      '-DkDriver_Name="OPUNG"' \\
-      '-DkPlugIn_BundleID="com.opung.audio.driver"' \\
-      '-DkDevice_Name="OPUNG Microphone"' \\
-      '-DkDevice2_Name="OPUNG Microphone"' \\
-      '-DkManufacturer_Name="OPUNG Audio AI"' \\
-      '-DkNumber_Of_Channels=2' \\
-      "\$HAL_BUILD_DIR/BlackHole.c" \\
-      -o "\$HAL_BUILD_DIR/OPUNG.driver/Contents/MacOS/OPUNG" 2>/dev/null && DRIVER_BUILT=1 || true
-  fi
-fi
-
-# Fallback Offline: Jika internet/clang tidak tersedia tapi BlackHole2ch.driver sudah ada di Mac,
-# kloning dan rebrand ke OPUNG Mic 2ch (13 byte identik)
-if [ "\$DRIVER_BUILT" -eq 0 ] && [ -f "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver/Contents/MacOS/BlackHole" ]; then
-  cp -f "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver/Contents/MacOS/BlackHole" "\$HAL_BUILD_DIR/OPUNG.driver/Contents/MacOS/OPUNG"
-  perl -pi -e 's/BlackHole 2ch/OPUNG Mic 2ch/g' "\$HAL_BUILD_DIR/OPUNG.driver/Contents/MacOS/OPUNG" 2>/dev/null || true
-  DRIVER_BUILT=1
-fi
-
-if [ "\$DRIVER_BUILT" -eq 1 ] && [ -f "\$HAL_BUILD_DIR/OPUNG.driver/Contents/MacOS/OPUNG" ]; then
-  chmod +x "\$HAL_BUILD_DIR/OPUNG.driver/Contents/MacOS/OPUNG"
-  /usr/bin/xattr -cr "\$HAL_BUILD_DIR/OPUNG.driver" 2>/dev/null || true
-  /usr/bin/codesign --force --deep --sign - "\$HAL_BUILD_DIR/OPUNG.driver" 2>/dev/null || true
-  cp -R "\$HAL_BUILD_DIR/OPUNG.driver" "\$APP_BUNDLE/Contents/Resources/OPUNG.driver"
-
-  echo "🔐 Memasang 'OPUNG Microphone' ke /Library/Audio/Plug-Ins/HAL/OPUNG.driver..."
-  cat << EOF_INST_DRV > "\$HAL_BUILD_DIR/install_drv.sh"
-#!/bin/bash
-rm -rf '/Library/Audio/Plug-Ins/HAL/OPUNG.driver'
-cp -R '\$HAL_BUILD_DIR/OPUNG.driver' '/Library/Audio/Plug-Ins/HAL/OPUNG.driver'
-chown -R root:wheel '/Library/Audio/Plug-Ins/HAL/OPUNG.driver'
-killall coreaudiod || true
-EOF_INST_DRV
-  chmod +x "\$HAL_BUILD_DIR/install_drv.sh"
-  /usr/bin/osascript -e "do shell script \\"/bin/bash '\$HAL_BUILD_DIR/install_drv.sh'\\" with administrator privileges" 2>/dev/null || true
-  echo "✅ Driver Virtual 'OPUNG Microphone' berhasil diinstal di macOS Sound / Google Meet / Zoom!"
-fi
-
-rm -rf "\$HAL_BUILD_DIR"
-
-/usr/bin/xattr -cr "\$0" 2>/dev/null || true
 /usr/bin/xattr -cr "\$APP_BUNDLE" 2>/dev/null || true
 /usr/bin/codesign --force --deep --sign - "\$APP_BUNDLE" 2>/dev/null || true
 
-echo "✅ 1/3: OPUNG.app (Menu Bar Edition + OPUNG Microphone) terpasang di /Applications/OPUNG.app"
-
-# 2. Buat Wizard Installer .PKG Resmi macOS (seperti Krisp.ai Installer: App + OPUNG.driver)
-if command -v pkgbuild >/dev/null 2>&1; then
-  echo "📦 2/3: Mencetak Wizard Installer macOS (OPUNG-Installer.pkg) di Desktop..."
-  rm -rf "\$PKG_SCRIPTS_DIR" "\$PKG_OUTPUT"
-  mkdir -p "\$PKG_SCRIPTS_DIR"
-
-  cat << 'EOF_POSTINSTALL' > "\$PKG_SCRIPTS_DIR/postinstall"
-#!/bin/bash
-/usr/bin/xattr -cr "/Applications/OPUNG.app" 2>/dev/null || true
-/usr/bin/codesign --force --deep --sign - "/Applications/OPUNG.app" 2>/dev/null || true
-if [ -d "/Applications/OPUNG.app/Contents/Resources/OPUNG.driver" ]; then
-  rm -rf "/Library/Audio/Plug-Ins/HAL/OPUNG.driver"
-  cp -R "/Applications/OPUNG.app/Contents/Resources/OPUNG.driver" "/Library/Audio/Plug-Ins/HAL/OPUNG.driver"
-  chown -R root:wheel "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" 2>/dev/null || true
-  /usr/bin/codesign --force --deep --sign - "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" 2>/dev/null || true
-  killall coreaudiod 2>/dev/null || true
-fi
-open -a "/Applications/OPUNG.app" 2>/dev/null || true
-exit 0
-EOF_POSTINSTALL
-  chmod +x "\$PKG_SCRIPTS_DIR/postinstall"
-
-  pkgbuild --component "\$APP_BUNDLE" \\
-    --install-location "/Applications" \\
-    --scripts "\$PKG_SCRIPTS_DIR" \\
-    --identifier "com.opung.studio.macos.pkg" \\
-    --version "9.0.0" \\
-    "\$PKG_OUTPUT" >/dev/null 2>&1 || true
-
-  /usr/bin/xattr -cr "\$PKG_OUTPUT" 2>/dev/null || true
-  rm -rf "\$PKG_SCRIPTS_DIR"
-  echo "✅ Wizard Installer selesai: \$PKG_OUTPUT"
-fi
-
-# 3. Buat Disk Image .DMG Resmi macOS (Hanya berisi OPUNG.app agar bersih dan tidak membingungkan)
 if command -v hdiutil >/dev/null 2>&1; then
-  echo "💿 3/3: Mencetak Disk Image macOS (OPUNG-Installer.dmg) di Desktop..."
   rm -rf "\$DMG_STAGING" "\$DMG_OUTPUT"
   mkdir -p "\$DMG_STAGING"
   cp -R "\$APP_BUNDLE" "\$DMG_STAGING/"
+  ln -s /Applications "\$DMG_STAGING/Applications"
   hdiutil create -volname "OPUNG Installer" -srcfolder "\$DMG_STAGING" -ov -format UDZO "\$DMG_OUTPUT" >/dev/null 2>&1 || true
   /usr/bin/xattr -cr "\$DMG_OUTPUT" 2>/dev/null || true
   rm -rf "\$DMG_STAGING"
-  echo "✅ Disk Image .DMG selesai: \$DMG_OUTPUT"
 fi
 
-echo ""
-echo "🎉 SELESAI! Lihat ikon '🎙️ OPUNG' di Menu Bar kanan atas Mac Anda & pilih 'OPUNG Microphone' di Meet/Zoom."
+echo "🎉 SELESAI! Pilih 'BlackHole 2ch' sebagai mikrofon di Google Meet / Zoom."
 open -a "\$APP_BUNDLE"
 `;
 }
@@ -1888,14 +2142,14 @@ export const ELECTRON_MACOS_FILES: MacOSFileSpec[] = [
     filename: 'native_host.m',
     language: 'objective-c',
     description:
-      'Source Code Native macOS Cocoa + WebKit (NSStatusItem Menu Bar + NSWindow + WKWebView): Menampilkan ikon OPUNG di Menu Bar kanan atas macOS persis seperti Krisp.ai!',
+      'Source Code Native macOS Cocoa + WebKit + CoreAudio HAL Output Bridge: Menampilkan ikon OPUNG di Menu Bar atas macOS & mengalirkan audio 48kHz ke BlackHole 2ch!',
     content: MACOS_NATIVE_OBJC_SOURCE,
   },
   {
     filename: 'Install-OPUNG-MacOS.command',
     language: 'bash',
     description:
-      'Installer Otomatis macOS: Memasang "/Applications/OPUNG.app" (Menu Bar Edition), memasang driver mikrofon virtual "/Library/Audio/Plug-Ins/HAL/OPUNG.driver" ("OPUNG Microphone"), serta mencetak file "OPUNG-Installer.pkg" dan "OPUNG-Installer.dmg" di Desktop Anda.',
+      'Installer Otomatis macOS: Memasang "/Applications/OPUNG.app" (Menu Bar Edition + BlackHole 2ch Bridge) serta mencetak file "OPUNG-Installer.dmg" di Desktop Anda.',
     content: generateMacOSOneClickInstallerScript(),
   },
   {
@@ -2263,7 +2517,8 @@ export function buildOpungAppIconIcns(): Uint8Array {
   }
 
   const png128 = renderIconPng(128, 128);
-  const totalIcnsLen = 8 + (8 + png128.length);
+  const png256 = renderIconPng(256, 256);
+  const totalIcnsLen = 8 + (8 + png128.length) + (8 + png256.length);
   const icns = new Uint8Array(totalIcnsLen);
   const icnsDv = new DataView(icns.buffer);
   // Header 'icns'
@@ -2273,33 +2528,146 @@ export function buildOpungAppIconIcns(): Uint8Array {
   icns[3] = 0x73; // 's'
   icnsDv.setUint32(4, totalIcnsLen, false);
 
-  // Chunk 'ic07' (128x128 PNG)
-  icns[8] = 0x69; // 'i'
-  icns[9] = 0x63; // 'c'
-  icns[10] = 0x30; // '0'
-  icns[11] = 0x37; // '7'
-  icnsDv.setUint32(12, 8 + png128.length, false);
-  icns.set(png128, 16);
+  // Chunk 1: 'ic07' (128x128 PNG)
+  let icnsPos = 8;
+  icns[icnsPos + 0] = 0x69; // 'i'
+  icns[icnsPos + 1] = 0x63; // 'c'
+  icns[icnsPos + 2] = 0x30; // '0'
+  icns[icnsPos + 3] = 0x37; // '7'
+  icnsDv.setUint32(icnsPos + 4, 8 + png128.length, false);
+  icns.set(png128, icnsPos + 8);
+  icnsPos += 8 + png128.length;
+
+  // Chunk 2: 'ic08' (256x256 Retina PNG untuk ikon 128pt tajam di jendela .DMG & Dock)
+  icns[icnsPos + 0] = 0x69; // 'i'
+  icns[icnsPos + 1] = 0x63; // 'c'
+  icns[icnsPos + 2] = 0x30; // '0'
+  icns[icnsPos + 3] = 0x38; // '8'
+  icnsDv.setUint32(icnsPos + 4, 8 + png256.length, false);
+  icns.set(png256, icnsPos + 8);
 
   cachedOpungIcnsBytes = icns;
   return icns;
 }
 
 /**
+ * Menghasilkan file metadata Finder macOS asli (`.DS_Store` — 15.364 byte, Buddy Allocator `Bud1` + B-Tree `DSDB`):
+ * - Mengatur ukuran jendela Finder kompak `540 x 380` (`WindowBounds: "{{260, 220}, {540, 380}}"`) persis seperti Termul Manager
+ * - Menyembunyikan toolbar, sidebar, tab bar, dan menampilkan status bar bawah (`2 items`)
+ * - Mengatur `arrangeBy: "none"` dan `iconSize: 128.0` agar ikon besar, tajam, dan TIDAK terbalik oleh urutan abjad
+ * - Menempatkan `OPUNG.app` di sebelah KIRI (`x = 145, y = 165`) dan `Applications` di sebelah KANAN (`x = 395, y = 165`)
+ */
+export function buildOpungDmgDsStore(): Uint8Array {
+  const ds = new Uint8Array(15364);
+  const runs: Array<[number, string]> = [
+    [3, '01427564310000200000000800000020000000100c'],
+    [46, '0800000008'],
+    [71, '02'],
+    [79, '0600000001000010'],
+    [2055, '01'],
+    [2062, '080b'],
+    [3111, '01000000200000000100000040000000010000008000000001000001'],
+    [3143, '01000002'],
+    [3151, '01000004'],
+    [3163, '01000010'],
+    [3171, '01000020'],
+    [3179, '01000040'],
+    [3187, '01000080'],
+    [3195, '010001'],
+    [3203, '010002'],
+    [3211, '010004'],
+    [3219, '010008'],
+    [3227, '010010'],
+    [3235, '010020'],
+    [3243, '010040'],
+    [3251, '010080'],
+    [3259, '0101'],
+    [3267, '0102'],
+    [3275, '0104'],
+    [3283, '0108'],
+    [3291, '0110'],
+    [3299, '0120'],
+    [3307, '0140'],
+    [
+      4107,
+      '0600000001002e62777370626c6f62000000ef62706c6973743030d90102030405060708090a0a0a0a0b0a0a0c0d5f1014436f6e7461696e657253686f77536964656261725f10155072657669657750616e655669736962696c6974795b53686f77506174686261725b53686f77536964656261725d53686f775374617475734261725b53686f77546162566965775b53686f77546f6f6c6261725c5369646562617257696474685c57696e646f77426f756e6473080910005f10187b7b3236302c203232307d2c207b3534302c203338307d7d081b324a5662707c8895a2a3a4a6',
+    ],
+    [4339, '0101'],
+    [4348, '0e'],
+    [
+      4364,
+      'c100000001002e69637670626c6f620000017e62706c6973743030de0102030405060708090a0b0c0d0e0f1010101112121314151516171159617272616e676542795f10136261636b67726f756e64436f6c6f72426c75655f10146261636b67726f756e64436f6c6f72477265656e5f10126261636b67726f756e64436f6c6f725265645e6261636b67726f756e64547970655b677269644f6666736574585b677269644f6666736574595b6772696453706163696e675869636f6e53697a655d6c6162656c4f6e426f74746f6d5f100f73686f7749636f6e507265766965775c73686f774974656d496e666f587465787453697a655f1012766965774f7074696f6e7356657273696f6e546e6f6e65233ff0',
+    ],
+    [4645, '100123'],
+    [4656, '234059'],
+    [4665, '234060'],
+    [4674, '0908234028'],
+    [
+      4686,
+      '080025002f0045005c00710080008c009800a400ad00bb00cd00da00e300f800fd010601080111011a012301240125',
+    ],
+    [4739, '0201'],
+    [4748, '18'],
+    [
+      4763,
+      '012e00000001002e7653726e6c6f6e670000000100000001002e7673746c7479706569636e760000000c004100700070006c00690063006100740069006f006e0073496c6f63626c6f62000000100000018b000000a5ffffff',
+    ],
+    [
+      4860,
+      '09004f00500055004e0047002e006100700070496c6f63626c6f620000001000000091000000a5ffffff',
+    ],
+    [8199, '03'],
+    [8206, '200b000000450000100c'],
+    [9231, '01044453444200000001'],
+    [9264, '020000002000000060'],
+    [9280, '010000008000000001000001'],
+    [9296, '01000002'],
+    [9304, '01000004'],
+    [9312, '0200000800000028'],
+    [9324, '01000030'],
+    [9336, '01000040'],
+    [9344, '01000080'],
+    [9352, '010001'],
+    [9360, '010002'],
+    [9368, '010004'],
+    [9376, '010008'],
+    [9384, '010010'],
+    [9392, '010020'],
+    [9400, '010040'],
+    [9408, '010080'],
+    [9416, '0101'],
+    [9424, '0102'],
+    [9432, '0104'],
+    [9440, '0108'],
+    [9448, '0110'],
+    [9456, '0120'],
+    [9464, '0140'],
+  ];
+
+  for (const [offset, hex] of runs) {
+    for (let i = 0; i < hex.length; i += 2) {
+      ds[offset + (i >> 1)] = parseInt(hex.slice(i, i + 2), 16);
+    }
+  }
+  return ds;
+}
+
+/**
  * Membangun Disk Image macOS Asli (.DMG — Apple HFS Plus version 4 / TN1150) murni di browser:
  * - Memiliki HFSPlusVolumeHeader resmi ('H+' 0x482B di offset 1024 & Backup Volume Header di akhir disk)
  * - Mengatur finderInfo[2] = 2 (kHFSRootFolderID) sehingga saat file OPUNG-Installer.dmg diklik di
- *   Downloads / Finder macOS, jendela Finder "OPUNG Installer" OTOMATIS langsung terbuka di layar!
- * - Menampilkan 2 item berdampingan persis seperti installer macOS standar (contoh: Termul Manager):
- *   1. OPUNG.app (di sebelah kiri, lengkap dengan ikon kustom AppIcon.icns Option 1)
- *   2. Applications (di sebelah kanan, shortcut/symlink resmi ke /Applications untuk Drag & Drop!)
+ *   Downloads / Finder macOS, jendela Finder "OPUNG" OTOMATIS langsung terbuka di layar!
+ * - Dilengkapi `.DS_Store` & `.VolumeIcon.icns` resmi sehingga ukuran jendela kompak (540x380),
+ *   ikon berukuran 128pt Retina, `OPUNG.app` berada di sebelah KIRI (145, 165) dan `Applications`
+ *   berada di sebelah KANAN (395, 165) persis seperti Termul Manager!
  */
 export function buildMacOSDiskImageDmg(): ArrayBuffer {
   const encoder = new TextEncoder();
   const BLOCK_SIZE = 4096;
   const TOTAL_BLOCKS = 256; // 256 * 4096 = 1,048,576 bytes (1.0 MB HFS+ Volume)
-  const HFS_TIMESTAMP = 3845659200; // Seconds since 1904-01-01 00:00:00 UTC
+  const HFS_TIMESTAMP = 3853017600; // Seconds since 1904-01-01 00:00:00 UTC
   const appIconIcnsBytes = buildOpungAppIconIcns();
+  const dsStoreBytes = buildOpungDmgDsStore();
 
   interface HfsFolderItem {
     kind: 'folder';
@@ -2319,6 +2687,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     mode: number;
     data: Uint8Array;
     isSymlink?: boolean;
+    isInvisible?: boolean;
     locationX?: number;
     locationY?: number;
     startBlock?: number;
@@ -2330,8 +2699,8 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
       kind: 'folder',
       cnid: 2,
       parentCnid: 1,
-      name: 'OPUNG Installer',
-      valence: 2,
+      name: 'OPUNG',
+      valence: 4,
       isRoot: true,
     },
     {
@@ -2377,16 +2746,34 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
       kind: 'file',
       cnid: 21,
       parentCnid: 2,
-      name: 'Applications',
-      mode: 0o120755,
-      isSymlink: true,
-      locationX: 355,
-      locationY: 140,
-      data: encoder.encode('/Applications'),
+      name: '.DS_Store',
+      mode: 0o100644,
+      isInvisible: true,
+      data: dsStoreBytes,
     },
     {
       kind: 'file',
       cnid: 22,
+      parentCnid: 2,
+      name: '.VolumeIcon.icns',
+      mode: 0o100644,
+      isInvisible: true,
+      data: appIconIcnsBytes,
+    },
+    {
+      kind: 'file',
+      cnid: 23,
+      parentCnid: 2,
+      name: 'Applications',
+      mode: 0o120755,
+      isSymlink: true,
+      locationX: 395,
+      locationY: 165,
+      data: encoder.encode('/Applications'),
+    },
+    {
+      kind: 'file',
+      cnid: 24,
       parentCnid: 17,
       name: 'Info.plist',
       mode: 0o100644,
@@ -2394,7 +2781,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 23,
+      cnid: 25,
       parentCnid: 18,
       name: 'OPUNG',
       mode: 0o100755,
@@ -2402,7 +2789,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 24,
+      cnid: 26,
       parentCnid: 18,
       name: 'RNNoiseStudio',
       mode: 0o100755,
@@ -2410,7 +2797,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 25,
+      cnid: 27,
       parentCnid: 19,
       name: 'AppIcon.icns',
       mode: 0o100644,
@@ -2418,7 +2805,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 26,
+      cnid: 28,
       parentCnid: 20,
       name: 'index.html',
       mode: 0o100644,
@@ -2426,7 +2813,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 27,
+      cnid: 29,
       parentCnid: 20,
       name: 'native_host.jxa.js',
       mode: 0o100644,
@@ -2434,7 +2821,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     },
     {
       kind: 'file',
-      cnid: 28,
+      cnid: 30,
       parentCnid: 20,
       name: 'native_host.m',
       mode: 0o100644,
@@ -2500,16 +2887,17 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
 
     // FolderInfo (offset 48..63)
     if (folder.isRoot) {
-      // Atur ukuran & posisi jendela Finder saat volume dibuka (top=160, left=260, bottom=480, right=770 -> 510x320)
-      dv.setInt16(48, 160, false);
+      // Ukuran & posisi jendela Finder (top=220, left=260, bottom=600, right=800 -> 540x380) + kHasCustomIcon (0x0400)
+      dv.setInt16(48, 220, false);
       dv.setInt16(50, 260, false);
-      dv.setInt16(52, 480, false);
-      dv.setInt16(54, 770, false);
+      dv.setInt16(52, 600, false);
+      dv.setInt16(54, 800, false);
+      dv.setUint16(56, 0x0400, false); // kHasCustomIcon untuk menampilkan .VolumeIcon.icns di titlebar jendela Finder
     } else if (folder.isBundle) {
       // kHasBundle = 0x2000 agar Finder macOS mengenali OPUNG.app sebagai Application Bundle dengan ikon AppIcon.icns!
       dv.setUint16(56, 0x2000, false);
-      dv.setInt16(58, 140, false); // icon location Y (sejajar dengan Applications di kanan)
-      dv.setInt16(60, 145, false); // icon location X (di sisi kiri jendela Finder)
+      dv.setInt16(58, 165, false); // icon location Y (sejajar dengan Applications di kanan)
+      dv.setInt16(60, 145, false); // icon location X (di sisi KIRI jendela Finder)
     }
     return buf;
   }
@@ -2537,8 +2925,13 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
       dv.setUint32(48, 0x736c6e6b, false); // 'slnk'
       dv.setUint32(52, 0x72686170, false); // 'rhap'
       dv.setUint16(56, 0x0000, false);
-      dv.setInt16(58, file.locationY ?? 140, false); // icon location Y
-      dv.setInt16(60, file.locationX ?? 355, false); // icon location X (di sisi kanan jendela Finder)
+      dv.setInt16(58, file.locationY ?? 165, false); // icon location Y
+      dv.setInt16(60, file.locationX ?? 395, false); // icon location X (di sisi KANAN jendela Finder)
+    } else if (file.isInvisible) {
+      // kIsInvisible = 0x4000 agar .DS_Store dan .VolumeIcon.icns tersembunyi dan Finder menampilkan "2 items"
+      dv.setUint16(56, 0x4000, false);
+      dv.setInt16(58, 900, false);
+      dv.setInt16(60, 900, false);
     }
 
     // Data Fork HFSPlusForkData (offset 88..167)

@@ -113,6 +113,7 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
     MACOS_INFO_PLIST,
     generateMacOSOneClickInstallerScript,
     buildOpungAppIconIcns,
+    buildOpungDmgDsStore,
     buildMacOSDiskImageDmg,
   } = await import('../utils/macosAppBuilder');
 
@@ -135,36 +136,53 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
   assert.ok(MACOS_INFO_PLIST.includes('<key>CFBundleIconFile</key>'));
   assert.ok(MACOS_INFO_PLIST.includes('<string>AppIcon.icns</string>'));
 
-  // Pastikan buildOpungAppIconIcns() menghasilkan file Apple Icon Image (.icns) valid dengan header 'icns' dan tipe 'ic07' (128x128 PNG)
+  // Pastikan buildOpungAppIconIcns() menghasilkan file Apple Icon Image (.icns) valid dengan header 'icns', 'ic07' (128x128) & 'ic08' (256x256 Retina)
   const icnsBytes = buildOpungAppIconIcns();
   const icnsMagic = new TextDecoder().decode(icnsBytes.subarray(0, 4));
   const icnsType = new TextDecoder().decode(icnsBytes.subarray(8, 12));
   assert.equal(icnsMagic, 'icns');
   assert.equal(icnsType, 'ic07');
-  assert.ok(icnsBytes.byteLength > 1024);
+  assert.ok(icnsBytes.byteLength > 200000);
 
-  // Pastikan OPUNG.app mengenali "OPUNG Microphone" (l.includes('opung')) sebagai Virtual Mic utama & mencegah loopback
-  assert.ok(MACOS_STANDALONE_APP_HTML.includes("l.includes('opung')"));
-  assert.ok(MACOS_STANDALONE_APP_HTML.includes('isOpungOrBlackHoleInputLabel'));
+  // Pastikan buildOpungDmgDsStore() menghasilkan file .DS_Store (Bud1 + DSDB + bwsp 540x380 + icvp 128pt + Iloc OPUNG.app di kiri & Applications di kanan)
+  const dsBytes = buildOpungDmgDsStore();
+  assert.equal(dsBytes.byteLength, 15364);
+  const dsBud1 = new TextDecoder().decode(dsBytes.subarray(4, 8));
+  assert.equal(dsBud1, 'Bud1');
+  const dsText = new TextDecoder().decode(dsBytes);
+  assert.ok(dsText.includes('{{260, 220}, {540, 380}}'));
 
-  // Pastikan launcher internal OPUNG.app otomatis menyalin ke /Applications/OPUNG.app, menjembatani izin mikrofon TCC macOS (OPUNG_TCC_BRIDGE + POSIX::setsid), dan memasang OPUNG.driver
+  // Pastikan OPUNG.app hanya menggunakan 1 virtual mic resmi (BlackHole 2ch), memfilter OPUNG.driver duplikat, dan mengaktifkan echoGuardDecayDb + echoCancellation: true
+  assert.ok(MACOS_STANDALONE_APP_HTML.includes('isDeprecatedOpungDriverLabel'));
+  assert.ok(MACOS_STANDALONE_APP_HTML.includes('isAnyVirtualOrDeprecatedInputLabel'));
+  assert.ok(MACOS_STANDALONE_APP_HTML.includes('pickBestPhysicalInputDevice'));
+  assert.ok(MACOS_STANDALONE_APP_HTML.includes('echoGuardDecayDb'));
+  assert.ok(MACOS_STANDALONE_APP_HTML.includes('opungAudioBridge'));
+  assert.ok(!MACOS_STANDALONE_APP_HTML.includes('echoCancellation: !loopbackAudible'));
+
+  // Pastikan jembatan CoreAudio HAL Output di Objective-C tersedia untuk menulis langsung ke BlackHole 2ch
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('findBlackHoleAudioDeviceID'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('kAudioUnitSubType_HALOutput'));
+  assert.ok(MACOS_NATIVE_OBJC_SOURCE.includes('opungAudioBridge'));
+
+  // Pastikan launcher internal OPUNG.app otomatis menyalin ke /Applications/OPUNG.app, membersihkan OPUNG.driver duplikat, dan memastikan BlackHole2ch.driver siap
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('/Applications/OPUNG.app'));
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('OPUNG_TCC_BRIDGE'));
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('POSIX::setsid()'));
   assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('com.apple.security.device.audio-input'));
-  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('/Library/Audio/Plug-Ins/HAL/OPUNG.driver'));
-  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('OPUNG Microphone'));
+  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('rm -rf "/Library/Audio/Plug-Ins/HAL/OPUNG.driver"'));
+  assert.ok(MACOS_NATIVE_LAUNCHER_SH.includes('BlackHole2ch.driver'));
 
-  // Pastikan buildMacOSDiskImageDmg() menghasilkan disk image Apple HFS+ + UDIF (.dmg) yang valid dengan OPUNG.app + symlink Applications (2 items)
+  // Pastikan buildMacOSDiskImageDmg() menghasilkan disk image Apple HFS+ + UDIF (.dmg) yang valid dengan .DS_Store, .VolumeIcon.icns, OPUNG.app & symlink Applications
   const dmgBuffer = buildMacOSDiskImageDmg();
   assert.ok(dmgBuffer.byteLength >= 1048576 + 512);
   const dmgBytes = new Uint8Array(dmgBuffer);
   const dmgDv = new DataView(dmgBuffer);
 
-  // Periksa HFSPlusVolumeHeader pada offset 1024: signature 'H+' (0x482B), version 4, fileCount = 8 (termasuk symlink Applications & AppIcon.icns), dan finderInfo[2] = 2 (auto-open window)
+  // Periksa HFSPlusVolumeHeader pada offset 1024: signature 'H+' (0x482B), version 4, fileCount = 10, dan finderInfo[2] = 2 (auto-open window)
   assert.equal(dmgDv.getUint16(1024, false), 0x482b);
   assert.equal(dmgDv.getUint16(1026, false), 4);
-  assert.equal(dmgDv.getUint32(1024 + 32, false), 8);
+  assert.equal(dmgDv.getUint32(1024 + 32, false), 10);
   assert.equal(dmgDv.getUint32(1024 + 88, false), 2);
 
   // Periksa trailer UDIF 'koly' pada 512 byte terakhir
@@ -176,6 +194,7 @@ test('macOS Menu Bar (NSStatusItem), OPUNG Virtual Mic (OPUNG.driver), and Direc
   const dmgText = new TextDecoder().decode(dmgBytes);
   assert.ok(dmgText.includes('RNNoiseStudio'));
   assert.ok(dmgText.includes('/Applications'));
+  assert.ok(dmgText.includes('{{260, 220}, {540, 380}}'));
   assert.ok(dmgText.includes('whole disk (Apple_HFS : 0)'));
   assert.ok(!dmgText.includes('Klik 2x Pasang OPUNG.command'));
 });

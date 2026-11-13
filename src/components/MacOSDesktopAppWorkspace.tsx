@@ -77,6 +77,7 @@ class NearFieldMacDspCore {
   private noiseFloorRms = 120.0;
   private holdCounter = 0;
   private holdFrames = 26; // 260ms hold alami agar suku kata & konsonan S/T/K utuh dan jernih
+  private echoGuardDecayDb = -80.0;
   public lastFrameDb = -75;
   public isGateOpen = false;
   private wasEnabled = true;
@@ -98,10 +99,16 @@ class NearFieldMacDspCore {
     this.prevSample = 0;
     this.noiseFloorRms = 120.0;
     this.holdCounter = 0;
+    this.echoGuardDecayDb = -80.0;
     this.smoothedGain = 0.0;
   }
 
-  private processFrame480(frame: Float32Array, thresholdDb: number, krispMode = true) {
+  private processFrame480(
+    frame: Float32Array,
+    thresholdDb: number,
+    krispMode = true,
+    isLoopbackTest = false
+  ) {
     let vocalBandEnergy = 0;
     let totalEnergy = 0;
     let zeroCrossings = 0;
@@ -151,11 +158,22 @@ class NearFieldMacDspCore {
 
     this.lastFrameDb = Math.round(frameDb);
 
-    // GERBANG JARAK DEKAT MUTLAK (<= 1 METER) — TETAP SAMA & KETAT
+    // Anti-Cave-Echo Guard saat Tes Dengar Suara Sendiri aktif:
+    // Mencegah pantulan speaker (~120ms kemudian) memicu ulang gerbang secara berulang seperti di goa.
+    this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);
+    const effectiveThresholdDb = isLoopbackTest
+      ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)
+      : thresholdDb;
+    const activeHoldFrames = isLoopbackTest ? 9 : this.holdFrames;
+
+    // GERBANG JARAK DEKAT MUTLAK (<= 1 METER)
     let targetGain = 0.0;
-    if (frameDb >= thresholdDb) {
+    if (frameDb >= effectiveThresholdDb) {
       targetGain = 1.0;
-      this.holdCounter = this.holdFrames;
+      this.holdCounter = activeHoldFrames;
+      if (frameDb > this.echoGuardDecayDb) {
+        this.echoGuardDecayDb = frameDb;
+      }
     } else if (this.holdCounter > 0) {
       this.holdCounter--;
       targetGain = 1.0;
@@ -200,7 +218,8 @@ class NearFieldMacDspCore {
     outputBuffer: Float32Array,
     enabled: boolean,
     thresholdDb: number,
-    krispMode = true
+    krispMode = true,
+    isLoopbackTest = false
   ) {
     if (!enabled) {
       this.wasEnabled = false;
@@ -218,7 +237,7 @@ class NearFieldMacDspCore {
     this.inputRing.pushScaled(inputBuffer, inputBuffer.length, PCM16_SCALE);
     while (this.inputRing.available >= RNNOISE_FRAME_SIZE) {
       this.inputRing.pullScaled(this.frame480, 0, RNNOISE_FRAME_SIZE, 1.0);
-      this.processFrame480(this.frame480, thresholdDb, krispMode);
+      this.processFrame480(this.frame480, thresholdDb, krispMode, isLoopbackTest);
       this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
     }
 
@@ -312,7 +331,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     if (track && typeof track.applyConstraints === 'function') {
       track
         .applyConstraints({
-          echoCancellation: speakerEchoGuardEnabled && !loopbackAudibleRef.current,
+          echoCancellation: true,
           noiseSuppression: krispModeRef.current,
           autoGainControl: false,
         })
@@ -326,7 +345,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     if (track && typeof track.applyConstraints === 'function') {
       track
         .applyConstraints({
-          echoCancellation: speakerEchoGuardRef.current && !loopbackAudibleRef.current,
+          echoCancellation: true,
           noiseSuppression: krispModeEnabled,
           autoGainControl: false,
         })
@@ -352,7 +371,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       warmthNode.gain.setTargetAtTime(vocalClarityEnabled ? 2.0 : 0.0, now, 0.02);
       presenceNode.gain.setTargetAtTime(vocalClarityEnabled ? 4.5 : 0.0, now, 0.02);
       airShelfNode.gain.setTargetAtTime(vocalClarityEnabled ? 3.5 : 0.0, now, 0.02);
-      makeupGainNode.gain.setTargetAtTime(vocalClarityEnabled ? 1.25 : 1.0, now, 0.02);
+      makeupGainNode.gain.setTargetAtTime(
+        loopbackAudibleRef.current ? 0.85 : vocalClarityEnabled ? 1.35 : 1.0,
+        now,
+        0.02
+      );
     }
   }, [vocalClarityEnabled]);
 
@@ -364,10 +387,15 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     isMicRunningRef.current = isMicRunning;
   }, [isMicRunning]);
 
+  const isDeprecatedOpungDriverLabel = (label: string) => {
+    const l = (label || '').toLowerCase();
+    return l.includes('opung');
+  };
+
   const isVirtualCableLabel = (label: string) => {
     const l = (label || '').toLowerCase();
+    if (isDeprecatedOpungDriverLabel(l)) return false;
     return (
-      l.includes('opung') ||
       l.includes('blackhole') ||
       l.includes('vb-cable') ||
       l.includes('soundflower') ||
@@ -377,14 +405,23 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     );
   };
 
-  const isOpungOrBlackHoleInputLabel = (label: string) => {
+  const isAnyVirtualOrDeprecatedInputLabel = (label: string) => {
     const l = (label || '').toLowerCase();
-    return l.includes('opung') || l.includes('blackhole');
+    return (
+      l.includes('opung') ||
+      l.includes('blackhole') ||
+      l.includes('vb-cable') ||
+      l.includes('soundflower') ||
+      l.includes('loopback') ||
+      l.includes('existential') ||
+      l.includes('virtual') ||
+      l.includes('aggregate')
+    );
   };
 
   const isPhysicalSpeakerOrEarphoneLabel = (label: string) => {
     const l = (label || '').toLowerCase();
-    if (isVirtualCableLabel(l)) return false;
+    if (isAnyVirtualOrDeprecatedInputLabel(l)) return false;
     return (
       l.includes('headphone') ||
       l.includes('earphone') ||
@@ -398,16 +435,84 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     );
   };
 
+  const pickBestPhysicalInputDevice = (
+    inputs: MediaDeviceInfo[],
+    requestedId?: string
+  ): MediaDeviceInfo | null => {
+    const physicalInputs = inputs.filter(
+      (d) =>
+        d.kind === 'audioinput' &&
+        d.deviceId !== 'default' &&
+        d.deviceId !== 'communications' &&
+        !isAnyVirtualOrDeprecatedInputLabel(d.label)
+    );
+    if (
+      requestedId &&
+      requestedId !== 'default' &&
+      requestedId !== 'communications'
+    ) {
+      const exactMatch = physicalInputs.find((d) => d.deviceId === requestedId);
+      if (exactMatch) return exactMatch;
+    }
+    const builtInMatch = physicalInputs.find((d) => {
+      const l = (d.label || '').toLowerCase();
+      return (
+        l.includes('macbook') ||
+        l.includes('built-in') ||
+        l.includes('internal') ||
+        l.includes('mikrofon') ||
+        l.includes('microphone')
+      );
+    });
+    return builtInMatch || physicalInputs[0] || null;
+  };
+
+  const routeEarphoneLoopbackToPhysicalDevice = useCallback(async () => {
+    try {
+      const audioEl = earphoneAudioRef.current as
+        | (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> })
+        | null;
+      if (!audioEl || typeof audioEl.setSinkId !== 'function') return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices.filter(
+        (d) =>
+          d.kind === 'audiooutput' &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isAnyVirtualOrDeprecatedInputLabel(d.label)
+      );
+      const headphoneOut = outputs.find((d) => {
+        const l = (d.label || '').toLowerCase();
+        return (
+          l.includes('headphone') ||
+          l.includes('earphone') ||
+          l.includes('airpods') ||
+          l.includes('bluetooth')
+        );
+      });
+      const physicalOut =
+        headphoneOut ||
+        outputs.find((d) => isPhysicalSpeakerOrEarphoneLabel(d.label)) ||
+        outputs[0];
+      if (physicalOut && physicalOut.deviceId) {
+        await audioEl.setSinkId(physicalOut.deviceId).catch(() => {});
+      }
+    } catch {
+      // Ignore if sink routing unsupported
+    }
+  }, []);
+
   const applyVirtualSinkOutput = useCallback(
     async (sinkId: string, customOuts?: MediaDeviceInfo[]) => {
       setSelectedOutputId(sinkId);
       const audioEl = virtualSinkAudioRef.current;
       if (!audioEl) return;
 
-      // WAJIB: Selalu bisukan & hentikan terlebih dahulu agar TIDAK PERNAH bocor ke Earphone Default!
+      // WAJIB: Selalu bisukan & lepas srcObject terlebih dahulu agar stream baru ke BlackHole 2ch segar
       audioEl.muted = true;
       audioEl.volume = 0;
       audioEl.pause();
+      audioEl.srcObject = null;
 
       if (
         !sinkId ||
@@ -415,7 +520,6 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         sinkId === 'communications' ||
         sinkId === 'coreaudio-default'
       ) {
-        audioEl.srcObject = null;
         setSinkConnectedText('Siaga (Earphone Aman)');
         return;
       }
@@ -424,9 +528,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       const chosenDev = list.find((d) => d.deviceId === sinkId);
       if (chosenDev && isPhysicalSpeakerOrEarphoneLabel(chosenDev.label)) {
         // Cegah pengguna tidak sengaja memilih Earphone/Speaker fisik di Output #2
-        audioEl.srcObject = null;
         setSinkConnectedText('Diblokir (Ini Earphone/Speaker!)');
         return;
+      }
+
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        await audioCtxRef.current.resume().catch(() => {});
       }
 
       try {
@@ -435,24 +542,17 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         };
         if (typeof elWithSink.setSinkId === 'function') {
           await elWithSink.setSinkId(sinkId);
-          const isOpungDev =
-            chosenDev && chosenDev.label.toLowerCase().includes('opung');
           if (cleanStreamRef.current) {
             audioEl.srcObject = cleanStreamRef.current;
             audioEl.volume = 1.0;
             audioEl.muted = false;
             await audioEl.play().catch(() => {});
-            setSinkConnectedText(
-              isOpungDev ? 'AKTIF KE OPUNG MIC ✓' : 'AKTIF KE VIRTUAL MIC ✓'
-            );
+            setSinkConnectedText('AKTIF KE BLACKHOLE 2CH ✓');
           } else {
-            setSinkConnectedText(
-              isOpungDev ? 'Siap ke OPUNG Mic ✓' : 'Siap ke Virtual Mic ✓'
-            );
+            setSinkConnectedText('Siap ke BlackHole 2ch ✓');
           }
         } else {
-          // JANGAN PERNAH unmute jika setSinkId tidak didukung (misal Safari/WKWebView),
-          // karena akan langsung bocor ke Earphone Default!
+          // JANGAN PERNAH unmute jika setSinkId tidak didukung, karena akan bocor ke Earphone Default!
           audioEl.srcObject = null;
           setSinkConnectedText('Siaga (Tanpa Bocor Earphone)');
         }
@@ -471,29 +571,47 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     try {
       if (!navigator.mediaDevices?.enumerateDevices) return;
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const ins = devices.filter((d) => d.kind === 'audioinput');
-      const outs = devices.filter((d) => d.kind === 'audiooutput');
+      // Saring ketat: Jangan pernah tampilkan BlackHole 2ch / OPUNG Microphone di dropdown Input Fisik!
+      const ins = devices.filter(
+        (d) =>
+          d.kind === 'audioinput' &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          !isAnyVirtualOrDeprecatedInputLabel(d.label)
+      );
+      // Saring ketat: Hilangkan OPUNG Microphone duplikat dari daftar Output agar cukup 1 BlackHole 2ch!
+      const outs = devices.filter(
+        (d) =>
+          d.kind === 'audiooutput' &&
+          !isDeprecatedOpungDriverLabel(d.label)
+      );
       setInputDevices(ins);
       setOutputDevices(outs);
 
-      // Prioritaskan "OPUNG Microphone" jika sudah terinstal, atau "BlackHole 2ch" sebagai cadangan
-      const opungOut = outs.find(
-        (d) =>
-          d.deviceId !== 'default' &&
-          d.deviceId !== 'communications' &&
-          d.label.toLowerCase().includes('opung')
-      );
-      const virtualOut =
-        opungOut ||
+      // Prioritaskan "BlackHole 2ch" sebagai satu-satunya mikrofon virtual resmi
+      const blackHoleOut =
+        outs.find(
+          (d) =>
+            d.deviceId !== 'default' &&
+            d.deviceId !== 'communications' &&
+            d.label.toLowerCase().includes('blackhole')
+        ) ||
         outs.find(
           (d) =>
             d.deviceId !== 'default' &&
             d.deviceId !== 'communications' &&
             isVirtualCableLabel(d.label)
         );
-      if (virtualOut) {
-        if (!selectedOutputId || selectedOutputId === virtualOut.deviceId) {
-          await applyVirtualSinkOutput(virtualOut.deviceId, outs);
+      if (blackHoleOut) {
+        const currentValid = outs.some(
+          (d) =>
+            d.deviceId === selectedOutputId &&
+            d.deviceId !== 'default' &&
+            d.deviceId !== 'communications' &&
+            !isPhysicalSpeakerOrEarphoneLabel(d.label)
+        );
+        if (!selectedOutputId || !currentValid || selectedOutputId === blackHoleOut.deviceId) {
+          await applyVirtualSinkOutput(blackHoleOut.deviceId, outs);
         }
       }
     } catch {
@@ -567,78 +685,69 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         let targetInput =
           customInputId !== undefined ? customInputId : selectedInputId;
 
-        // CEGAH KONFLIK LOOPBACK:
-        // Jika pengguna tidak sengaja memilih OPUNG Microphone / BlackHole 2ch sebagai INPUT Mic,
-        // otomatis cari mikrofon fisik asli agar tidak membaca keheningan dari Virtual Mic!
+        // 1. CEGAH KONFLIK LOOPBACK SEBELUM getUserMedia:
+        // Jangan pernah biarkan OPUNG membaca dari 'default' jika 'default' macOS sedang disetel ke BlackHole 2ch!
         if (navigator.mediaDevices?.enumerateDevices) {
           const preDevices = await navigator.mediaDevices.enumerateDevices();
-          const preInputs = preDevices.filter((d) => d.kind === 'audioinput');
-          const chosenInputObj = preInputs.find((d) => d.deviceId === targetInput);
-          if (
-            chosenInputObj &&
-            isOpungOrBlackHoleInputLabel(chosenInputObj.label)
-          ) {
-            const realPhysicalMic = preInputs.find(
-              (d) => d.label && !isOpungOrBlackHoleInputLabel(d.label)
-            );
-            if (realPhysicalMic) {
-              targetInput = realPhysicalMic.deviceId;
-              setSelectedInputId(realPhysicalMic.deviceId);
-            }
+          const bestPreMic = pickBestPhysicalInputDevice(preDevices, targetInput);
+          if (bestPreMic && bestPreMic.deviceId) {
+            targetInput = bestPreMic.deviceId;
+            setSelectedInputId(bestPreMic.deviceId);
           }
         }
 
-        // CEGAH SUARA LAWAN RAPAT DARI SPEAKER MACBOOK PRO MASUK KE MIC (HARDWARE AEC):
-        // Saat pengguna memakai Speaker MacBook Pro (bukan earphone) dan loopbackAudible = false,
-        // aktifkan Hardware Acoustic Echo Cancellation (echoCancellation: true) agar chip CoreAudio
-        // MacBook menghapus suara teman rapat yang keluar dari speaker MacBook sebelum masuk ke grafik biru!
-        // noiseSuppression & autoGainControl tetap FALSE agar vokal asli tetap jernih lewat 5-Stage Studio EQ.
-        const useHardwareSpeakerAec =
-          speakerEchoGuardRef.current && !loopbackAudibleRef.current;
         const useKrispMode = krispModeRef.current;
 
+        // Hardware AEC (echoCancellation: true) WAJIB SELALU AKTIF agar suara speaker/earphone tidak pernah memantul!
         let stream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            deviceId: targetInput ? { exact: targetInput } : undefined,
+            deviceId:
+              targetInput &&
+              targetInput !== 'default' &&
+              targetInput !== 'communications'
+                ? { exact: targetInput }
+                : undefined,
             sampleRate: { ideal: 48000 },
             channelCount: { ideal: 1 },
-            echoCancellation: useHardwareSpeakerAec,
+            echoCancellation: true,
             noiseSuppression: useKrispMode,
             autoGainControl: false,
           },
         });
 
-        // Cek apakah stream Default yang diberikan macOS ternyata adalah OPUNG Microphone / BlackHole 2ch!
-        // Jika ya, langsung ganti ke Mikrofon Fisik MacBook asli!
+        // 2. Setelah izin diberikan & label perangkat terbuka, pastikan 100% kita memakai Mikrofon Fisik MacBook (bukan BlackHole 2ch)!
         const activeTrack = stream.getAudioTracks()[0];
-        if (
+        const allDevsAfter = await navigator.mediaDevices.enumerateDevices();
+        const bestPhysicalMic = pickBestPhysicalInputDevice(allDevsAfter, targetInput);
+        const currentTrackDeviceId =
+          activeTrack && typeof activeTrack.getSettings === 'function'
+            ? activeTrack.getSettings().deviceId
+            : '';
+        const isCurrentTrackVirtual =
           activeTrack &&
           activeTrack.label &&
-          isOpungOrBlackHoleInputLabel(activeTrack.label)
+          isAnyVirtualOrDeprecatedInputLabel(activeTrack.label);
+
+        if (
+          bestPhysicalMic &&
+          (isCurrentTrackVirtual ||
+            !targetInput ||
+            targetInput === 'default' ||
+            (currentTrackDeviceId && currentTrackDeviceId !== bestPhysicalMic.deviceId && !customInputId))
         ) {
-          const allDevs = await navigator.mediaDevices.enumerateDevices();
-          const realMic = allDevs.find(
-            (d) =>
-              d.kind === 'audioinput' &&
-              d.label &&
-              !isOpungOrBlackHoleInputLabel(d.label) &&
-              d.deviceId !== 'default'
-          );
-          if (realMic) {
-            stream.getTracks().forEach((t) => t.stop());
-            targetInput = realMic.deviceId;
-            setSelectedInputId(realMic.deviceId);
-            stream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                deviceId: { exact: realMic.deviceId },
-                sampleRate: { ideal: 48000 },
-                channelCount: { ideal: 1 },
-                echoCancellation: useHardwareSpeakerAec,
-                noiseSuppression: useKrispMode,
-                autoGainControl: false,
-              },
-            });
-          }
+          stream.getTracks().forEach((t) => t.stop());
+          targetInput = bestPhysicalMic.deviceId;
+          setSelectedInputId(bestPhysicalMic.deviceId);
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId: { exact: bestPhysicalMic.deviceId },
+              sampleRate: { ideal: 48000 },
+              channelCount: { ideal: 1 },
+              echoCancellation: true,
+              noiseSuppression: useKrispMode,
+              autoGainControl: false,
+            },
+          });
         }
 
         micStreamRef.current = stream;
@@ -717,7 +826,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         studioCompressor.release.value = 0.12;
 
         const makeupGainNode = ctx.createGain();
-        makeupGainNode.gain.value = isClarityOn ? 1.25 : 1.0;
+        makeupGainNode.gain.value = loopbackAudibleRef.current
+          ? 0.85
+          : isClarityOn
+          ? 1.35
+          : 1.0;
 
         clarityNodesRef.current = {
           mudCutNode,
@@ -738,8 +851,16 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           const enabled = isEnabledRef.current;
           const thresh = thresholdDbRef.current;
           const krispOn = krispModeRef.current;
+          const isLoopback = loopbackAudibleRef.current;
 
-          dspCore.processAudioBlock(inBuf, outBuf, enabled, thresh, krispOn);
+          dspCore.processAudioBlock(
+            inBuf,
+            outBuf,
+            enabled,
+            thresh,
+            krispOn,
+            isLoopback
+          );
           hardGateGain.gain.value =
             enabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0
               ? 0.0
@@ -747,6 +868,24 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         };
 
         const cleanDest = ctx.createMediaStreamDestination();
+        try {
+          cleanDest.channelCount = 2;
+          cleanDest.channelCountMode = 'explicit';
+          cleanDest.channelInterpretation = 'speakers';
+        } catch {
+          // Ignore if read-only in older engines
+        }
+
+        // Sub-audible Pilot (-96 dBFS @ 20Hz) agar Chrome tidak pernah menidurkan stream BlackHole 2ch ke Google Meet!
+        const pilotOsc = ctx.createOscillator();
+        pilotOsc.type = 'sine';
+        pilotOsc.frequency.value = 20;
+        const pilotGain = ctx.createGain();
+        pilotGain.gain.value = 0.000015;
+        pilotOsc.connect(pilotGain);
+        pilotGain.connect(cleanDest);
+        pilotOsc.start();
+
         cleanStreamRef.current = cleanDest.stream;
 
         // KEEP-ALIVE NODE (Gain = 0.0): Menjamin Chrome/WebKit selalu memproses onaudioprocess
@@ -771,22 +910,48 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         keepAliveGain.connect(ctx.destination);
 
         const postAuthDevices = await navigator.mediaDevices.enumerateDevices();
-        const ins = postAuthDevices.filter((d) => d.kind === 'audioinput');
-        const outs = postAuthDevices.filter((d) => d.kind === 'audiooutput');
+        const ins = postAuthDevices.filter(
+          (d) =>
+            d.kind === 'audioinput' &&
+            d.deviceId !== 'default' &&
+            d.deviceId !== 'communications' &&
+            !isAnyVirtualOrDeprecatedInputLabel(d.label)
+        );
+        const outs = postAuthDevices.filter(
+          (d) =>
+            d.kind === 'audiooutput' &&
+            !isDeprecatedOpungDriverLabel(d.label)
+        );
         setInputDevices(ins);
         setOutputDevices(outs);
 
-        const blackHoleOut = outs.find(
+        const blackHoleOut =
+          outs.find(
+            (d) =>
+              d.deviceId !== 'default' &&
+              d.deviceId !== 'communications' &&
+              d.label.toLowerCase().includes('blackhole')
+          ) ||
+          outs.find(
+            (d) =>
+              d.deviceId !== 'default' &&
+              d.deviceId !== 'communications' &&
+              isVirtualCableLabel(d.label)
+          );
+        const validSelectedOut = outs.find(
           (d) =>
+            d.deviceId === selectedOutputId &&
             d.deviceId !== 'default' &&
             d.deviceId !== 'communications' &&
-            isVirtualCableLabel(d.label)
+            !isPhysicalSpeakerOrEarphoneLabel(d.label)
         );
-        const targetSinkId =
-          selectedOutputId || (blackHoleOut ? blackHoleOut.deviceId : '');
+        const targetSinkId = validSelectedOut
+          ? validSelectedOut.deviceId
+          : blackHoleOut
+          ? blackHoleOut.deviceId
+          : '';
 
         if (virtualSinkAudioRef.current) {
-          // Pastikan default dalam kondisi bisu penuh sebelum setSinkId ke BlackHole selesai
           virtualSinkAudioRef.current.muted = true;
           virtualSinkAudioRef.current.volume = 0;
           virtualSinkAudioRef.current.pause();
@@ -794,8 +959,6 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           if (targetSinkId) {
             await applyVirtualSinkOutput(targetSinkId, outs);
           } else {
-            // KRITIS: JANGAN PERNAH unmute virtualSinkAudioRef jika BlackHole tidak ada/dipilih!
-            // Jika di-unmute tanpa setSinkId ke BlackHole, suara akan bocor ke Earphone!
             virtualSinkAudioRef.current.srcObject = null;
             setSinkConnectedText('Siaga (Earphone Aman)');
           }
@@ -803,12 +966,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
         if (earphoneAudioRef.current) {
           if (loopbackAudibleRef.current) {
+            await routeEarphoneLoopbackToPhysicalDevice();
             earphoneAudioRef.current.srcObject = cleanDest.stream;
-            earphoneAudioRef.current.volume = 1.0;
+            earphoneAudioRef.current.volume = 0.68;
             earphoneAudioRef.current.muted = false;
             await earphoneAudioRef.current.play().catch(() => {});
           } else {
-            // PUTUS TOTAL saat Tes Dengar Suara Sendiri = MATI
             earphoneAudioRef.current.muted = true;
             earphoneAudioRef.current.volume = 0;
             earphoneAudioRef.current.pause();
@@ -825,7 +988,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         );
       }
     },
-    [selectedInputId, selectedOutputId, applyVirtualSinkOutput]
+    [
+      selectedInputId,
+      selectedOutputId,
+      applyVirtualSinkOutput,
+      routeEarphoneLoopbackToPhysicalDevice,
+    ]
   );
 
   // Fungsi 1-Klik untuk Memaksa Bangunkan (Wake-Up) & Menyambungkan Ulang BlackHole 2ch
@@ -838,20 +1006,30 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       await audioCtxRef.current.resume().catch(() => {});
     }
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const outs = devices.filter((d) => d.kind === 'audiooutput');
-    setOutputDevices(outs);
-    const blackHole = outs.find(
+    const outs = devices.filter(
       (d) =>
-        d.deviceId !== 'default' &&
-        d.deviceId !== 'communications' &&
-        isVirtualCableLabel(d.label)
+        d.kind === 'audiooutput' &&
+        !isDeprecatedOpungDriverLabel(d.label)
     );
+    setOutputDevices(outs);
+    const blackHole =
+      outs.find(
+        (d) =>
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          d.label.toLowerCase().includes('blackhole')
+      ) ||
+      outs.find(
+        (d) =>
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications' &&
+          isVirtualCableLabel(d.label)
+      );
     if (blackHole) {
       await applyVirtualSinkOutput(blackHole.deviceId, outs);
     } else if (selectedOutputId) {
       await applyVirtualSinkOutput(selectedOutputId, outs);
     } else if (virtualSinkAudioRef.current) {
-      // Tetap bisukan jika BlackHole belum ditemukan agar TIDAK bocor ke Earphone
       virtualSinkAudioRef.current.muted = true;
       virtualSinkAudioRef.current.volume = 0;
       virtualSinkAudioRef.current.pause();
@@ -869,24 +1047,24 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       await startLiveMacMicrophone();
     }
 
-    // Saat Tes Dengar Suara Sendiri = AKTIF, matikan sementara AEC agar OS tidak mengira
-    // suara tes Anda di earphone adalah pantulan speaker lawan rapat.
-    // Saat Tes Dengar = MATI, kembalikan ke pengaturan Anti-Suara Speaker Laptop (AEC).
-    const activeTrack = micStreamRef.current?.getAudioTracks()[0];
-    if (activeTrack && typeof activeTrack.applyConstraints === 'function') {
-      activeTrack
-        .applyConstraints({
-          echoCancellation: speakerEchoGuardRef.current && !next,
-          noiseSuppression: krispModeRef.current,
-          autoGainControl: false,
-        })
-        .catch(() => {});
+    // PENTING: JANGAN PERNAH mematikan echoCancellation saat Tes Dengar Suara Sendiri!
+    // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
+    if (clarityNodesRef.current && audioCtxRef.current) {
+      clarityNodesRef.current.makeupGainNode.gain.setTargetAtTime(
+        next ? 0.85 : vocalClarityRef.current ? 1.35 : 1.0,
+        audioCtxRef.current.currentTime,
+        0.02
+      );
     }
 
     if (earphoneAudioRef.current) {
       if (next && cleanStreamRef.current) {
+        if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+          await audioCtxRef.current.resume().catch(() => {});
+        }
+        await routeEarphoneLoopbackToPhysicalDevice();
         earphoneAudioRef.current.srcObject = cleanStreamRef.current;
-        earphoneAudioRef.current.volume = 1.0;
+        earphoneAudioRef.current.volume = 0.68;
         earphoneAudioRef.current.muted = false;
         await earphoneAudioRef.current.play().catch(() => {});
       } else {
@@ -910,6 +1088,17 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     let simTick = 0;
 
     const drawLoop = () => {
+      // Pastikan virtualSinkAudioRef (BlackHole 2ch) tidak pernah ter-pause oleh browser saat pindah tab ke Google Meet
+      if (
+        isMicRunningRef.current &&
+        virtualSinkAudioRef.current &&
+        virtualSinkAudioRef.current.srcObject &&
+        !virtualSinkAudioRef.current.muted &&
+        virtualSinkAudioRef.current.paused
+      ) {
+        virtualSinkAudioRef.current.play().catch(() => {});
+      }
+
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
@@ -1057,7 +1246,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     URL.revokeObjectURL(url);
 
     setDownloadBanner(
-      'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, lalu buka aplikasi OPUNG.'
+      'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, geser OPUNG.app ke folder Applications, lalu buka aplikasinya.'
     );
   };
 
@@ -1073,7 +1262,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       id="macos-desktop-app-live"
       className="border border-slate-800/90 bg-[#0D1119] rounded-2xl p-6 sm:p-8"
     >
-      {/* Hidden Audio Elements for Virtual Mic (OPUNG Microphone / BlackHole 2ch) and Earphone Loopback (Both muted by default) */}
+      {/* Hidden Audio Elements for Virtual Mic (BlackHole 2ch) and Earphone Loopback (Both muted by default) */}
       <audio ref={virtualSinkAudioRef} muted playsInline className="hidden" />
       <audio ref={earphoneAudioRef} muted playsInline className="hidden" />
 
@@ -1081,19 +1270,21 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-800/80">
         <div>
           <div className="text-xs font-mono text-sky-400 mb-2">
-            APLIKASI MENU BAR MACOS + OPUNG VIRTUAL MIC · 48 KHZ STUDIO HD
+            APLIKASI MENU BAR MACOS + BLACKHOLE 2CH VIRTUAL MIC · 48 KHZ STUDIO HD
           </div>
           <h2
             className="font-display text-2xl sm:text-3xl font-bold text-slate-100 tracking-tight"
             style={{ textWrap: 'balance' }}
           >
-            Muncul di Menu Bar Atas Mac, Punya &ldquo;OPUNG Microphone&rdquo; Sendiri &amp; Aktif Otomatis
+            Muncul di Menu Bar Atas Mac &amp; Terhubung Langsung ke BlackHole 2ch untuk Google Meet
           </h2>
           <p className="text-sm text-slate-400 mt-2 max-w-2xl leading-relaxed">
-            Begitu dibuka dari <strong className="text-sky-300">OPUNG-Installer.dmg</strong>, ikon{' '}
+            Begitu dipasang dari <strong className="text-sky-300">OPUNG-Installer.dmg</strong> ke{' '}
+            <strong className="text-slate-200">Applications</strong>, ikon{' '}
             <strong className="text-sky-300">🎙️ OPUNG</strong> langsung muncul di{' '}
-            <strong className="text-slate-200">Menu Bar kanan atas macOS</strong> dan otomatis memasang{' '}
-            <strong className="text-emerald-300">OPUNG Microphone</strong> untuk Google Meet &amp; Zoom.
+            <strong className="text-slate-200">Menu Bar kanan atas macOS</strong> dan mengalirkan
+            suara jernih Anda ke <strong className="text-emerald-300">BlackHole 2ch</strong> untuk
+            Google Meet &amp; Zoom.
           </p>
         </div>
 
@@ -1133,7 +1324,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           <div className="space-y-1">
             <div className="font-semibold text-emerald-300">{downloadBanner}</div>
             <div className="text-slate-300">
-              Saat pertama kali membuka aplikasi OPUNG, cukup <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>.
+              Saat pertama kali membuka aplikasi OPUNG di Applications, cukup{' '}
+              <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>.
             </div>
           </div>
         </div>
@@ -1286,9 +1478,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                     <option value="">Otomatis Mikrofon Fisik MacBook (48kHz)</option>
                     {inputDevices.map((d) => (
                       <option key={d.deviceId} value={d.deviceId}>
-                        {isOpungOrBlackHoleInputLabel(d.label)
-                          ? `${d.label} (Jangan Pilih Sebagai Input Fisik)`
-                          : d.label || `Microphone (${d.deviceId.slice(0, 6)})`}
+                        {d.label || `Mikrofon Fisik (${d.deviceId.slice(0, 6)})`}
                       </option>
                     ))}
                   </select>
@@ -1311,13 +1501,14 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                     className="w-full px-2.5 py-2 text-[11px] bg-[#090D15] border border-slate-800 rounded-lg text-slate-200 focus:outline-none focus:border-sky-500"
                   >
                     <option value="">
-                      Otomatis OPUNG Microphone (Aman Tanpa Bocor Earphone)
+                      Siaga (Jangan Kirim ke Meet / Earphone Aman)
                     </option>
                     {outputDevices
                       .filter(
                         (d) =>
                           d.deviceId !== 'default' &&
-                          d.deviceId !== 'communications'
+                          d.deviceId !== 'communications' &&
+                          !isDeprecatedOpungDriverLabel(d.label)
                       )
                       .map((d) => {
                         const isPhysical = isPhysicalSpeakerOrEarphoneLabel(d.label);

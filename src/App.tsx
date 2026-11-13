@@ -1040,8 +1040,8 @@ export default function App() {
                   Buka folder <strong>Applications</strong> di MacBook Anda, lalu pada ikon{' '}
                   <strong>OPUNG</strong> cukup{' '}
                   <strong>Klik Kanan (2 jari) &rarr; pilih Open</strong>. OPUNG akan langsung
-                  memunculkan ikon <strong>🎙️ OPUNG di Menu Bar</strong> atas dan menyiapkan
-                  mikrofon virtual <strong>OPUNG Microphone</strong>.
+                  memunculkan ikon <strong>🎙️ OPUNG di Menu Bar</strong> atas dan mengalirkan
+                  suara jernih ke <strong>BlackHole 2ch</strong>.
                 </p>
               </div>
 
@@ -1058,11 +1058,11 @@ export default function App() {
                   LANGKAH 3 · PILIH MIC DI MEET / ZOOM
                 </div>
                 <h3 className="font-display text-lg font-bold text-white">
-                  Pilih &ldquo;OPUNG Microphone&rdquo; Saat Rapat
+                  Pilih &ldquo;BlackHole 2ch&rdquo; Saat Rapat
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   Buka pengaturan <strong>Audio</strong> di Google Meet, Zoom, atau Microsoft Teams,
-                  lalu pilih <strong>OPUNG Microphone</strong> sebagai mikrofon rapat Anda:
+                  lalu pilih <strong>BlackHole 2ch</strong> sebagai mikrofon rapat Anda:
                 </p>
               </div>
 
@@ -1073,7 +1073,7 @@ export default function App() {
                   </div>
                   <div className="text-emerald-300 font-bold mt-0.5 flex items-center gap-1.5">
                     <Mic className="w-3.5 h-3.5" />
-                    OPUNG Microphone
+                    BlackHole 2ch
                   </div>
                 </div>
                 <div className="pt-2 border-t border-slate-800">
