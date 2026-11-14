@@ -25,248 +25,12 @@ import {
   formatConnectedVirtualMicBadge,
 } from '../utils/audioDeviceFilters';
 
-const RNNOISE_FRAME_SIZE = 480;
-const RING_CAPACITY = 4096;
-const PCM16_SCALE = 32768.0;
-
-class CircularFloat32Buffer {
-  private capacity: number;
-  private mask: number;
-  private storage: Float32Array;
-  private writePtr = 0;
-  private readPtr = 0;
-  public available = 0;
-
-  constructor(capacity = RING_CAPACITY) {
-    this.capacity = capacity;
-    this.mask = capacity - 1;
-    this.storage = new Float32Array(capacity);
-  }
-
-  pushScaled(src: Float32Array, count: number, scale = 1.0): boolean {
-    if (count > this.capacity - this.available) return false;
-    for (let i = 0; i < count; i++) {
-      this.storage[this.writePtr] = src[i] * scale;
-      this.writePtr = (this.writePtr + 1) & this.mask;
-    }
-    this.available += count;
-    return true;
-  }
-
-  pullScaled(dst: Float32Array, offset: number, count: number, scale = 1.0): boolean {
-    if (this.available < count) return false;
-    for (let i = 0; i < count; i++) {
-      let s = this.storage[this.readPtr] * scale;
-      if (scale !== 1.0) s = s > 1.0 ? 1.0 : s < -1.0 ? -1.0 : s;
-      dst[offset + i] = s;
-      this.readPtr = (this.readPtr + 1) & this.mask;
-    }
-    this.available -= count;
-    return true;
-  }
-
-  clear() {
-    this.writePtr = 0;
-    this.readPtr = 0;
-    this.available = 0;
-    this.storage.fill(0);
-  }
-}
-
-class NearFieldMacDspCore {
-  private inputRing = new CircularFloat32Buffer(RING_CAPACITY);
-  private outputRing = new CircularFloat32Buffer(RING_CAPACITY);
-  private frame480 = new Float32Array(RNNOISE_FRAME_SIZE);
-  public smoothedGain = 0.0;
-  private hpX1 = 0;
-  private hpX2 = 0;
-  private hpY1 = 0;
-  private hpY2 = 0;
-  private scLpY = 0;
-  private prevSample = 0;
-  private noiseFloorRms = 120.0;
-  private holdCounter = 0;
-  private holdFrames = 26; // 260ms hold alami agar suku kata & konsonan S/T/K utuh dan jernih
-  private echoGuardDecayDb = -80.0;
-  public lastFrameDb = -75;
-  public isGateOpen = false;
-  private wasEnabled = true;
-
-  constructor() {
-    this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
-  }
-
-  public resetRings() {
-    this.inputRing.clear();
-    this.outputRing.clear();
-    this.frame480.fill(0);
-    this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
-    this.hpX1 = 0;
-    this.hpX2 = 0;
-    this.hpY1 = 0;
-    this.hpY2 = 0;
-    this.scLpY = 0;
-    this.prevSample = 0;
-    this.noiseFloorRms = 120.0;
-    this.holdCounter = 0;
-    this.echoGuardDecayDb = -80.0;
-    this.smoothedGain = 0.0;
-  }
-
-  private processFrame480(
-    frame: Float32Array,
-    thresholdDb: number,
-    krispMode = true,
-    isLoopbackTest = false
-  ) {
-    let vocalBandEnergy = 0;
-    let totalEnergy = 0;
-    let zeroCrossings = 0;
-
-    // 1. SIDECHAIN FORMANT DETECTOR (120Hz - 3100Hz) + ZERO-CROSSING RATE (ZCR) DISCRIMINATOR:
-    // Mengukur energi khusus pita suara manusia (Formant F0-F3) dan menghitung ZCR
-    // agar suara bor bangunan (> 4kHz), desis kipas, atau ketikan keyboard TIDAK BISA menipu gerbang!
-    for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-      const x0 = frame[i];
-      if ((x0 >= 0 && this.hpX1 < 0) || (x0 < 0 && this.hpX1 >= 0)) {
-        zeroCrossings++;
-      }
-      const yHp =
-        0.9888 * x0 -
-        1.9776 * this.hpX1 +
-        0.9888 * this.hpX2 +
-        1.9774 * this.hpY1 -
-        0.9778 * this.hpY2;
-      this.hpX2 = this.hpX1;
-      this.hpX1 = x0;
-      this.hpY2 = this.hpY1;
-      this.hpY1 = yHp;
-      this.scLpY += 0.33 * (yHp - this.scLpY);
-      vocalBandEnergy += this.scLpY * this.scLpY;
-      totalEnergy += yHp * yHp;
-    }
-
-    const vocalRms = Math.sqrt(vocalBandEnergy / RNNOISE_FRAME_SIZE);
-    const totalRms = Math.sqrt(totalEnergy / RNNOISE_FRAME_SIZE);
-
-    // 2. ADAPTIVE STATIONARY NOISE FLOOR TRACKER:
-    if (totalRms < this.noiseFloorRms) {
-      this.noiseFloorRms = 0.92 * this.noiseFloorRms + 0.08 * totalRms;
-    } else {
-      this.noiseFloorRms = 0.9985 * this.noiseFloorRms + 0.0015 * totalRms;
-    }
-    this.noiseFloorRms = Math.max(40.0, Math.min(4500.0, this.noiseFloorRms));
-
-    const normRms = Math.max(1e-7, vocalRms / PCM16_SCALE);
-    let frameDb = 20.0 * Math.log10(normRms);
-
-    // Penalti Non-Manusia (Mode Krisp): Jika frekuensi sangat tinggi/kasar (ZCR > 135 seperti suara bor/ketikan),
-    // turunkan dB detektor sebesar 12 dB agar suara benda mati di dekat mic tidak membuka gerbang!
-    if (krispMode && zeroCrossings > 135) {
-      frameDb -= 12.0;
-    }
-
-    this.lastFrameDb = Math.round(frameDb);
-
-    // Anti-Cave-Echo Guard saat Tes Dengar Suara Sendiri aktif:
-    // Mencegah pantulan speaker (~120ms kemudian) memicu ulang gerbang secara berulang seperti di goa.
-    this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);
-    const effectiveThresholdDb = isLoopbackTest
-      ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)
-      : thresholdDb;
-    const activeHoldFrames = isLoopbackTest ? 9 : this.holdFrames;
-
-    // GERBANG JARAK DEKAT MUTLAK (<= 1 METER)
-    let targetGain = 0.0;
-    if (frameDb >= effectiveThresholdDb) {
-      targetGain = 1.0;
-      this.holdCounter = activeHoldFrames;
-      if (frameDb > this.echoGuardDecayDb) {
-        this.echoGuardDecayDb = frameDb;
-      }
-    } else if (this.holdCounter > 0) {
-      this.holdCounter--;
-      targetGain = 1.0;
-    } else {
-      targetGain = 0.0;
-    }
-
-    this.isGateOpen = targetGain > 0.5;
-
-    // 3. WIENER INTRA-SPEECH DENOISING (Mengupas bising latar SAAT Anda sedang berbicara):
-    let intraSpeechDenoiseGain = 1.0;
-    if (krispMode && this.isGateOpen) {
-      const snr = Math.max(0.0, totalRms - this.noiseFloorRms * 1.25) / (totalRms + 1.0);
-      intraSpeechDenoiseGain = Math.max(0.28, Math.min(1.0, snr * 1.15));
-    }
-
-    const effectiveTargetGain = targetGain * intraSpeechDenoiseGain;
-    const maxVocalSlew = 5200.0;
-
-    // 4. SLEW-RATE TRANSIENT DE-CLICKER + Attack cepat (0.12) & Release halus (0.008)
-    for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-      let sample = frame[i];
-      if (krispMode) {
-        const delta = sample - this.prevSample;
-        if (delta > maxVocalSlew || delta < -maxVocalSlew) {
-          sample = this.prevSample + delta * 0.22;
-        }
-        this.prevSample = sample;
-      }
-
-      const coeff = effectiveTargetGain > this.smoothedGain ? 0.12 : 0.008;
-      this.smoothedGain += coeff * (effectiveTargetGain - this.smoothedGain);
-      if (this.smoothedGain < 0.003 && targetGain === 0.0) {
-        this.smoothedGain = 0.0;
-      }
-      frame[i] = sample * this.smoothedGain;
-    }
-  }
-
-  public processAudioBlock(
-    inputBuffer: Float32Array,
-    outputBuffer: Float32Array,
-    enabled: boolean,
-    thresholdDb: number,
-    krispMode = true,
-    isLoopbackTest = false
-  ) {
-    if (!enabled) {
-      this.wasEnabled = false;
-      outputBuffer.set(inputBuffer);
-      this.isGateOpen = true;
-      this.smoothedGain = 1.0;
-      return;
-    }
-
-    if (!this.wasEnabled) {
-      this.resetRings();
-      this.wasEnabled = true;
-    }
-
-    this.inputRing.pushScaled(inputBuffer, inputBuffer.length, PCM16_SCALE);
-    while (this.inputRing.available >= RNNOISE_FRAME_SIZE) {
-      this.inputRing.pullScaled(this.frame480, 0, RNNOISE_FRAME_SIZE, 1.0);
-      this.processFrame480(this.frame480, thresholdDb, krispMode, isLoopbackTest);
-      this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
-    }
-
-    if (
-      !this.outputRing.pullScaled(
-        outputBuffer,
-        0,
-        outputBuffer.length,
-        1.0 / PCM16_SCALE
-      )
-    ) {
-      outputBuffer.fill(0);
-    }
-
-    if (this.smoothedGain === 0.0) {
-      outputBuffer.fill(0);
-    }
-  }
-}
+import {
+  NearFieldHybridDspCore,
+} from '../utils/hybridDspCore';
+import {
+  createRnnoiseWasmProcessor,
+} from '../utils/rnnoiseEngine';
 
 export const MacOSDesktopAppWorkspace: React.FC = () => {
   // Real-Time macOS App State
@@ -291,6 +55,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   } | null>(null);
   const [isDownloadingWin, setIsDownloadingWin] = useState<boolean>(false);
 
+  const [rnnoiseReady, setRnnoiseReady] = useState<boolean>(false);
   const [liveStats, setLiveStats] = useState<{
     rawPct: number;
     cleanPct: number;
@@ -324,7 +89,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     krispLowPassNode: BiquadFilterNode;
     makeupGainNode: GainNode;
   } | null>(null);
-  const dspCoreRef = useRef<NearFieldMacDspCore>(new NearFieldMacDspCore());
+  const dspCoreRef = useRef<NearFieldHybridDspCore>(new NearFieldHybridDspCore());
+  const micSessionIdRef = useRef<number>(0);
   const micStreamRef = useRef<MediaStream | null>(null);
   const virtualSinkAudioRef = useRef<HTMLAudioElement | null>(null);
   const earphoneAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -665,6 +431,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   }, [refreshAudioDevices]);
 
   const stopLiveMacMicrophone = useCallback(async () => {
+    micSessionIdRef.current += 1;
+    setRnnoiseReady(false);
     appliedSinkIdRef.current = '';
     if (virtualSinkAudioRef.current) {
       virtualSinkAudioRef.current.muted = true;
@@ -695,7 +463,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     rawAnalyserRef.current = null;
     cleanAnalyserRef.current = null;
     clarityNodesRef.current = null;
-    dspCoreRef.current.resetRings();
+    dspCoreRef.current.destroy();
     setLoopbackAudible(false);
     loopbackAudibleRef.current = false;
     setIsMicRunning(false);
@@ -703,6 +471,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
   useEffect(() => {
     return () => {
+      micSessionIdRef.current += 1;
+      dspCoreRef.current.destroy();
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((t) => t.stop());
       }
@@ -714,8 +484,16 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
   const startLiveMacMicrophone = useCallback(
     async (customInputId?: string) => {
+      const sessionId = ++micSessionIdRef.current;
       setMicError(null);
+      setRnnoiseReady(false);
       try {
+        if (processorNodeRef.current) {
+          processorNodeRef.current.onaudioprocess = null;
+          processorNodeRef.current.disconnect();
+          processorNodeRef.current = null;
+        }
+        dspCoreRef.current.destroy();
         if (micStreamRef.current) {
           micStreamRef.current.getTracks().forEach((t) => t.stop());
         }
@@ -884,8 +662,23 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
         const processorNode = ctx.createScriptProcessor(512, 1, 1);
         processorNodeRef.current = processorNode;
-        const dspCore = new NearFieldMacDspCore();
+        const dspCore = new NearFieldHybridDspCore();
         dspCoreRef.current = dspCore;
+
+        // Inisialisasi real RNNoise 0.2 WASM asynchronously tanpa memblokir aliran audio;
+        // jika sesi mic dihentikan sebelum siap, instance langsung di-destroy agar bebas memory leak.
+        createRnnoiseWasmProcessor()
+          .then((engine) => {
+            if (micSessionIdRef.current !== sessionId || dspCoreRef.current !== dspCore) {
+              engine.destroy();
+              return;
+            }
+            dspCore.setRnnoiseEngine(engine);
+            setRnnoiseReady(true);
+          })
+          .catch(() => {
+            // Graceful fallback ke mode Formant + Wiener DSP bila WASM gagal dimuat
+          });
 
         processorNode.onaudioprocess = (ev) => {
           const inBuf = ev.inputBuffer.getChannelData(0);
@@ -1464,7 +1257,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                     </div>
                     <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
                       {isEnabled
-                        ? `Aktif · Radius <= ${distanceText} · Studio HD + AI Denoiser`
+                        ? `Aktif · Radius <= ${distanceText} · ${
+                            rnnoiseReady
+                              ? 'RNNoise WASM + Gate 1.0m'
+                              : 'Hybrid RNNoise WASM + Gate'
+                          }`
                         : 'Nonaktif (Mode Bypass — Suara sekitar ikut masuk)'}
                     </div>
                   </div>
@@ -1767,11 +1564,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                     02 · Otomatis Aktif
                   </div>
                   <div className="text-sm font-bold text-slate-100">
-                    Pengupas Bising Saat Bicara (Krisp-Grade)
+                    Pengupas Bising Neural (RNNoise 0.2 WASM)
                   </div>
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    Detektor Formant 120Hz–3.1kHz + Wiener Spectral Subtraction mengupas suara bor,
-                    kipas, dan ketikan keyboard bahkan ketika Anda sedang berbicara.
+                    Jaringan saraf tiruan Xiph.org RNNoise 48 kHz + ZCR Discriminator mengupas suara
+                    bor, kipas, dan ketikan keyboard bahkan ketika Anda sedang berbicara.
                   </p>
                 </div>
 

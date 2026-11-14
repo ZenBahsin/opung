@@ -4,6 +4,8 @@
  * serta konfigurasi Electron + electron-builder untuk macOS (Apple Silicon M1/M2/M3/M4 & Intel).
  */
 
+import { RNNOISE_SYNC_INLINE_SCRIPT } from './rnnoiseSyncInline';
+
 export interface MacOSFileSpec {
   filename: string;
   language: string;
@@ -12,12 +14,9 @@ export interface MacOSFileSpec {
 }
 
 /**
- * Kode HTML/JS Mandiri (Standalone) yang berada di dalam paket `RNNoise Studio.app/Contents/Resources/app/index.html`.
- * Berjalan pada konteks aman `http://127.0.0.1:48192` di macOS sehingga memiliki akses penuh ke:
- * - Mikrofon Fisik MacBook / Headset (`navigator.mediaDevices.getUserMedia`)
- * - Pemilihan Output Virtual Mic macOS (`setSinkId` -> `BlackHole 2ch`)
- * - Ring Buffer 480-sampel + High-Pass 120Hz + Hard Proximity Gate (<= 1 Meter, Gain 0.00x di bawah garis kuning)
- * - Grafik Spektrum Suara Real-Time + Tes Dengar Suara Sendiri
+ * Kode HTML/JS Mandiri (Standalone) yang berada di dalam paket `OPUNG.app/Contents/Resources/app/index.html`
+ * serta di-embed ke `Opung-Windows-x64.exe` / `Opung-Windows-Launcher.zip`.
+ * Menggunakan arsitektur Hybrid: Real RNNoise 0.2 Neural WASM + Proximity Gate (<= 1.0m) + 5-Stage Studio EQ.
  */
 export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 <html lang="id">
@@ -324,14 +323,14 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       </svg>
       <span>Opung</span>
     </span>
-    <span id="engineStatus" class="engine-meta">Office Proximity Ultra Noise Gate</span>
+    <span id="engineStatus" class="engine-meta">RNNoise WASM + Gate 1.0m</span>
   </div>
 
   <!-- Krisp-Style Single Master Switch -->
   <div id="heroSwitchCard" class="hero-switch-card active">
     <div>
       <div id="statusText" class="switch-title">Peredam Bising &amp; Fokus Suara Aktif</div>
-      <div id="hintText" class="switch-sub">Otomatis menjernihkan suara HD, mengupas bising latar &amp; memblokir obrolan &gt; 1m</div>
+      <div id="hintText" class="switch-sub">Hybrid RNNoise 0.2 WASM mengupas bising saat bicara &amp; memblokir obrolan &gt; 1m</div>
     </div>
     <button id="toggleBtn" class="toggle-track active" type="button" aria-label="Sakelar Utama Peredam Bising">
       <span class="toggle-thumb"></span>
@@ -402,10 +401,50 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
   <audio id="virtualCableAudioOut" playsinline muted></audio>
   <audio id="earphoneLoopbackOut" playsinline muted></audio>
 
+  <script>` + RNNOISE_SYNC_INLINE_SCRIPT + `</script>
   <script>
     const RNNOISE_FRAME_SIZE = 480;
     const RING_CAPACITY = 4096;
     const PCM16_SCALE = 32768.0;
+
+    async function createStandaloneRnnoiseEngine() {
+      const factory =
+        (typeof globalThis !== 'undefined' && globalThis.__createOpungRnnoiseSync) ||
+        (typeof window !== 'undefined' && window.__createOpungRnnoiseSync);
+      if (typeof factory !== 'function') {
+        throw new Error('RNNoise WASM factory unavailable');
+      }
+      const mod = factory();
+      if (mod.ready) {
+        await mod.ready;
+      }
+      const ctxPtr = mod._rnnoise_create(0);
+      if (!ctxPtr) {
+        throw new Error('Failed to create RNNoise state');
+      }
+      const framePtr = mod._malloc(RNNOISE_FRAME_SIZE * 4);
+      if (!framePtr) {
+        mod._rnnoise_destroy(ctxPtr);
+        throw new Error('Failed to allocate RNNoise buffer');
+      }
+      let destroyed = false;
+      return {
+        processFrameInPlace(frame480) {
+          if (destroyed) return 0;
+          const heapOffset = framePtr >> 2;
+          mod.HEAPF32.set(frame480, heapOffset);
+          const vadProb = mod._rnnoise_process_frame(ctxPtr, framePtr, framePtr);
+          frame480.set(mod.HEAPF32.subarray(heapOffset, heapOffset + RNNOISE_FRAME_SIZE));
+          return Number.isFinite(vadProb) ? vadProb : 0;
+        },
+        destroy() {
+          if (destroyed) return;
+          destroyed = true;
+          try { mod._free(framePtr); } catch (_e) {}
+          try { mod._rnnoise_destroy(ctxPtr); } catch (_e) {}
+        },
+      };
+    }
 
     class CircularFloat32Buffer {
       constructor(capacity = RING_CAPACITY) {
@@ -429,6 +468,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         if (this.available < count) return false;
         for (let i = 0; i < count; i++) {
           let s = this.storage[this.readPtr] * scale;
+          if (!Number.isFinite(s)) s = 0;
           if (scale !== 1.0) s = s > 1.0 ? 1.0 : s < -1.0 ? -1.0 : s;
           dst[offset + i] = s;
           this.readPtr = (this.readPtr + 1) & this.mask;
@@ -450,6 +490,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         this.outputRing = new CircularFloat32Buffer(RING_CAPACITY);
         this.frame480 = new Float32Array(RNNOISE_FRAME_SIZE);
         this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);
+        this.rnnoise = null;
         this.smoothedGain = 0.0;
         this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;
         this.scLpY = 0;
@@ -457,9 +498,30 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         this.noiseFloorRms = 120.0;
         this.holdCounter = 0;
         this.holdFrames = 26;
+        this.echoGuardDecayDb = -80.0;
         this.lastFrameDb = -75;
+        this.lastVadProb = 0;
         this.isGateOpen = false;
         this.wasEnabled = true;
+      }
+
+      get isRnnoiseActive() {
+        return this.rnnoise !== null;
+      }
+
+      setRnnoiseEngine(engine) {
+        if (this.rnnoise && this.rnnoise !== engine) {
+          try { this.rnnoise.destroy(); } catch (_e) {}
+        }
+        this.rnnoise = engine || null;
+      }
+
+      destroy() {
+        if (this.rnnoise) {
+          try { this.rnnoise.destroy(); } catch (_e) {}
+          this.rnnoise = null;
+        }
+        this.resetRings();
       }
 
       resetRings() {
@@ -472,16 +534,39 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         this.prevSample = 0;
         this.noiseFloorRms = 120.0;
         this.holdCounter = 0;
+        this.echoGuardDecayDb = -80.0;
         this.smoothedGain = 0.0;
+        this.lastFrameDb = -75;
+        this.lastVadProb = 0;
+        this.isGateOpen = false;
       }
 
       processFrame480(frame, thresholdDb, isLoopbackTest = false) {
+        // TAHAP 1: Real RNNoise 0.2 Neural WASM Denoiser
+        const hasRnnoise = this.rnnoise !== null;
+        let vadProb = 1.0;
+        if (hasRnnoise) {
+          try {
+            vadProb = this.rnnoise.processFrameInPlace(frame);
+            if (!Number.isFinite(vadProb)) vadProb = 0;
+            this.lastVadProb = Math.max(0, Math.min(1, vadProb));
+          } catch (_e) {
+            vadProb = 1.0;
+          }
+        } else {
+          this.lastVadProb = 0;
+        }
+
         let vocalBandEnergy = 0;
         let totalEnergy = 0;
         let zeroCrossings = 0;
 
         for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-          const x0 = frame[i];
+          let x0 = frame[i];
+          if (!Number.isFinite(x0)) {
+            x0 = 0;
+            frame[i] = 0;
+          }
           if ((x0 >= 0 && this.hpX1 < 0) || (x0 < 0 && this.hpX1 >= 0)) {
             zeroCrossings++;
           }
@@ -506,19 +591,22 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         const normRms = Math.max(1e-7, vocalRms / PCM16_SCALE);
         let frameDb = 20.0 * Math.log10(normRms);
 
-        // Diskriminator ZCR otomatis aktif: suara bor/ketikan (> 135 ZCR) tidak akan membuka gerbang
-        if (zeroCrossings > 135) {
+        // Diskriminator Bising Non-Manusia Hybrid (ZCR + Neural VAD Fusion)
+        if (hasRnnoise) {
+          if (zeroCrossings > 135 && vadProb < 0.35) {
+            frameDb -= 12.0;
+          } else if (vadProb < 0.16 && frameDb < thresholdDb + 10.0) {
+            frameDb -= 10.0;
+          } else if (vadProb >= 0.65) {
+            frameDb += 1.0;
+          }
+        } else if (zeroCrossings > 135) {
           frameDb -= 12.0;
         }
 
         this.lastFrameDb = Math.round(frameDb);
 
-        // Anti-Cave-Echo Guard saat Tes Dengar Suara Sendiri aktif:
-        // Pantulan speaker yang datang ~120ms kemudian memiliki energi lebih rendah dari puncak suara asli,
-        // sehingga ditahan agar tidak memicu ulang gerbang (mencegah efek gema berulang seperti di goa).
-        if (this.echoGuardDecayDb === undefined) {
-          this.echoGuardDecayDb = -80.0;
-        }
+        // Anti-Cave-Echo Guard + Near-Field Proximity Gate (<= 1.0m)
         this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);
         const effectiveThresholdDb = isLoopbackTest
           ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)
@@ -541,11 +629,12 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
         this.isGateOpen = targetGain > 0.5;
 
-        // Wiener Intra-Speech Denoising otomatis aktif saat bicara
         let intraSpeechDenoiseGain = 1.0;
         if (this.isGateOpen) {
           const snr = Math.max(0.0, totalRms - this.noiseFloorRms * 1.25) / (totalRms + 1.0);
-          intraSpeechDenoiseGain = Math.max(0.28, Math.min(1.0, snr * 1.15));
+          intraSpeechDenoiseGain = hasRnnoise
+            ? Math.max(0.78, Math.min(1.0, snr * 1.35))
+            : Math.max(0.28, Math.min(1.0, snr * 1.15));
         }
 
         const effectiveTargetGain = targetGain * intraSpeechDenoiseGain;
@@ -561,7 +650,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
           const coeff = effectiveTargetGain > this.smoothedGain ? 0.12 : 0.008;
           this.smoothedGain += coeff * (effectiveTargetGain - this.smoothedGain);
-          if (this.smoothedGain < 0.004 && targetGain === 0.0) {
+          if (this.smoothedGain < 0.003 && targetGain === 0.0) {
             this.smoothedGain = 0.0;
           }
           frame[i] = sample * this.smoothedGain;
@@ -617,7 +706,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     const canvas = document.getElementById('spectrumCanvas');
     const ctx = canvas.getContext('2d');
 
-    // Semua fitur positif (HD Voice EQ, Neural Krisp Denoiser, Speaker Echo Guard) OTOMATIS AKTIF!
+    // Semua fitur positif (RNNoise 0.2 WASM, Proximity Gate 1m, HD Voice EQ, Speaker Echo Guard) OTOMATIS AKTIF!
     let isEnabled = true;
     let thresholdDb = -26;
     let loopbackAudible = false;
@@ -626,6 +715,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let cleanAnalyser = null;
     let activeMakeupGainNode = null;
     let dspCore = new NearFieldRNNoiseDspCore();
+    let audioPipelineSessionId = 0;
     let currentMicStream = null;
     let currentCleanStream = null;
     let selectedVirtualSinkId = '';
@@ -800,7 +890,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         heroSwitchCard.className = 'hero-switch-card active';
         toggleBtn.className = 'toggle-track active';
         statusText.textContent = 'Peredam Bising & Fokus Suara Aktif';
-        hintText.textContent = 'Otomatis menjernihkan suara HD, mengupas bising latar & memblokir obrolan > 1m';
+        hintText.textContent = 'Hybrid RNNoise 0.2 WASM mengupas bising saat bicara & memblokir obrolan > 1m';
         document.title = 'Opung - Office Proximity Ultra Noise Gate';
       } else {
         heroSwitchCard.className = 'hero-switch-card';
@@ -1103,8 +1193,24 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       }
     }
 
+    window.addEventListener('beforeunload', () => {
+      audioPipelineSessionId += 1;
+      if (dspCore && typeof dspCore.destroy === 'function') {
+        dspCore.destroy();
+      }
+    });
+
     async function startMacAudioPipeline(selectedInputId) {
+      const sessionId = ++audioPipelineSessionId;
       try {
+        if (window.__opungProcessorNode) {
+          window.__opungProcessorNode.onaudioprocess = null;
+          window.__opungProcessorNode.disconnect();
+          window.__opungProcessorNode = null;
+        }
+        if (dspCore && typeof dspCore.destroy === 'function') {
+          dspCore.destroy();
+        }
         if (currentMicStream) {
           currentMicStream.getTracks().forEach((t) => t.stop());
         }
@@ -1258,6 +1364,20 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         window.__opungProcessorNode = processorNode;
         dspCore = new NearFieldRNNoiseDspCore();
 
+        createStandaloneRnnoiseEngine()
+          .then((engine) => {
+            if (audioPipelineSessionId !== sessionId) {
+              engine.destroy();
+              return;
+            }
+            dspCore.setRnnoiseEngine(engine);
+            const badge = document.getElementById('engineStatus');
+            if (badge) {
+              badge.textContent = 'RNNoise 0.2 WASM · Aktif';
+            }
+          })
+          .catch(() => {});
+
         const pcm16Scratch = new Int16Array(512);
         const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
 
@@ -1335,7 +1455,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           earphoneLoopbackOut.srcObject = null;
         }
 
-        document.getElementById('engineStatus').textContent = 'Office Proximity Ultra Noise Gate';
+        document.getElementById('engineStatus').textContent = dspCore.isRnnoiseActive
+          ? 'RNNoise 0.2 WASM · Aktif'
+          : 'Hybrid RNNoise WASM + Gate 1.0m';
         await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
       } catch (err) {
         document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
@@ -2995,7 +3117,6 @@ export function buildOpungDmgDsStore(): Uint8Array {
 export function buildMacOSDiskImageDmg(): ArrayBuffer {
   const encoder = new TextEncoder();
   const BLOCK_SIZE = 4096;
-  const TOTAL_BLOCKS = 256; // 256 * 4096 = 1,048,576 bytes (1.0 MB HFS+ Volume)
   const HFS_TIMESTAMP = 3853017600; // Seconds since 1904-01-01 00:00:00 UTC
   const appIconIcnsBytes = buildOpungAppIconIcns();
   const dsStoreBytes = buildOpungDmgDsStore();
@@ -3175,6 +3296,12 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
     nextBlock += blocksNeeded;
   }
   const usedBlocksBeforeEnd = nextBlock;
+
+  // Hitung ukuran HFS+ volume secara dinamis agar index.html + RNNoise WASM (~2 MB) selalu muat lega
+  const TOTAL_BLOCKS = Math.max(256, Math.ceil((usedBlocksBeforeEnd + 32) / 64) * 64);
+  if (TOTAL_BLOCKS > BLOCK_SIZE * 8) {
+    throw new Error('HFS+ single-block allocation bitmap capacity exceeded');
+  }
 
   const hfsByteLength = TOTAL_BLOCKS * BLOCK_SIZE;
   const hfsBuffer = new ArrayBuffer(hfsByteLength);
@@ -3523,7 +3650,7 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
 
   // 5. Bangun Apple UDIF Trailer (mish + XML Plist + 512-byte 'koly' block)
   // sehingga DiskImages2 (macOS Ventura / Sonoma / Sequoia) maupun HFS+ mounter langsung mengenali .dmg ini!
-  const sectorCount512 = hfsByteLength / 512; // 2048 sektor @ 512B
+  const sectorCount512 = hfsByteLength / 512;
 
   const mish = new Uint8Array(204 + 2 * 40);
   const mdv = new DataView(mish.buffer);
@@ -3532,10 +3659,10 @@ export function buildMacOSDiskImageDmg(): ArrayBuffer {
   mdv.setUint32(8, 0, false); // firstSectorNumber high
   mdv.setUint32(12, 0, false); // firstSectorNumber low
   mdv.setUint32(16, 0, false); // sectorCount high
-  mdv.setUint32(20, sectorCount512, false); // sectorCount low = 2048
+  mdv.setUint32(20, sectorCount512, false); // sectorCount low
   mdv.setUint32(24, 0, false); // dataOffset high
   mdv.setUint32(28, 0, false); // dataOffset low
-  mdv.setUint32(32, 2048, false); // buffersNeeded
+  mdv.setUint32(32, Math.max(2048, sectorCount512), false); // buffersNeeded
   mdv.setUint32(36, 0xffffffff, false); // blockDescriptors = -1
   mdv.setUint32(64, 0, false); // checksum.type = kUDIFChecksumTypeNone (0)
   mdv.setUint32(68, 0, false); // checksum.size = 0

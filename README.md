@@ -27,30 +27,30 @@ Berbeda dengan peredam bising bawaan laptop yang masih sering meloloskan suara r
 | Fitur | Kemampuan Teknis | Manfaat Saat Rapat |
 | :--- | :--- | :--- |
 | **Gerbang Radius &le; 1.0 Meter** | *Hard Proximity Gate* dengan 3 preset jarak (`0.5m Dekat`, `1.0m Kantor`, `1.5m Ruang`) | Suara obrolan rekan kerja di meja sebelah (&ge; 1.5m) diputus mutlak ke `0.00x` (`-90 dB`) |
-| **Pengupas Bising Saat Bicara** | *Sidechain Formant Detector* (`120 Hz – 3.1 kHz`) + *ZCR Discriminator* + *Wiener Spectral Subtraction* | Suara bor bangunan, deru kipas, dan ketikan *mechanical keyboard* dikupas bersih bahkan saat Anda sedang berbicara |
+| **Pengupas Bising Saat Bicara** | *Hybrid Real RNNoise 0.2 WASM* (Xiph.org Neural GRU) + *ZCR Discriminator* | Suara bor bangunan, deru kipas, dan ketikan *mechanical keyboard* dikupas bersih bahkan saat Anda sedang berbicara |
 | **Penjernih Vokal Studio HD** | *5-Stage Parametric EQ* (`48 kHz`) + *Soft-Knee Studio Compressor* | Menghilangkan suara mendem/kaleng (*Anti-Mud 260 Hz*) dan mengangkat artikulasi vokal (`+4.5 dB @ 3.5 kHz`) |
 | **Anti-Bocor Speaker & Anti-Goa** | *Hardware AEC* + *Echo Guard Decay Tracker* | Mencegah suara dari speaker MacBook atau laptop Windows memantul kembali ke mikrofon saat rapat tanpa *earphone* |
-| **Native macOS (Menu Bar)** | Objective-C (`Cocoa` + `NSStatusBar` + `WKWebView` + `CoreAudio HAL`) &rarr; `BlackHole 2ch` | Muncul di Menu Bar atas macOS, ukuran ringan, beban CPU `< 2%` |
+| **Native macOS (Menu Bar)** | Objective-C (`Cocoa` + `NSStatusBar` + `WKWebView` + `CoreAudio HAL`) &rarr; `BlackHole 2ch` | Muncul di Menu Bar atas macOS, offline WebAssembly, beban CPU `< 2%` |
 | **Native Windows (System Tray)** | `.NET 8 WinForms` + `Edge WebView2` + `NAudio WASAPI` &rarr; `VB-CABLE` | Berjalan di System Tray Windows 10/11 dalam satu file `Opung-Windows-x64.exe` |
 
 ---
 
 ## 4 Mesin Audio Pintar (Otomatis Aktif)
 
-Opung dirancang sesimpel aplikasi kelas komersial: cukup nyalakan **1 Sakelar Utama**, dan keempat mesin pemroses sinyal digital (*Digital Signal Processing*) berikut langsung bekerja secara *real-time* pada *frame* `480 sampel` (`10 ms` @ `48 kHz`):
+Opung menggabungkan **Arsitektur Hybrid** yang bekerja *real-time* pada *frame* `480 sampel` (`10 ms` @ `48 kHz`) begitu **1 Sakelar Utama** dinyalakan:
 
 ### 1. Sidechain Formant Detector & Proximity Gate (&le; 1.0 Meter)
-- Mengukur energi akustik khusus pada pita frekuensi pita suara manusia (*Formant F0–F3*, `120 Hz – 3.100 Hz`).
+- Mengukur energi akustik khusus pada pita frekuensi pita suara manusia (*Formant F0–F3*, `120 Hz – 3.100 Hz`) setelah dibersihkan oleh jaringan saraf RNNoise.
 - Dilengkapi 3 pilihan sensitivitas jarak instan:
   - **Dekat (`0.5m` / `-20 dB`)**: Mode super ketat untuk ruang kerja yang sangat bising.
   - **Kantor (`1.0m` / `-26 dB`)**: Pengaturan ideal untuk memblokir obrolan meja sebelah.
   - **Ruang (`1.5m` / `-38 dB`)**: Pengaturan lebih longgar untuk ruang kerja pribadi.
-- Setiap suara di bawah ambang batas jarak langsung ditutup ke **`Gain = 0.00x`** dengan *hold time* alami (`260 ms`) agar suku kata akhir dan konsonan (`S`, `T`, `K`) tidak pernah terpotong.
+- Setiap suara di bawah ambang batas jarak—termasuk suara rekan kerja di meja sebelah yang berbicara/mengajar *online*—langsung ditutup ke **`Gain = 0.00x`** dengan *hold time* alami (`260 ms`) agar suku kata akhir dan konsonan (`S`, `T`, `K`) tidak pernah terpotong.
 
-### 2. Zero-Crossing Rate (ZCR) Discriminator & Wiener Intra-Speech Denoising
-- Menghitung laju perpotongan nol (*Zero-Crossing Rate*) dan *Adaptive Noise Floor* pada setiap *frame* `10 ms`.
-- Bising frekuensi tinggi/kasar non-manusia (seperti mata bor bangunan atau ketikan *keyboard* dengan `ZCR > 135`) dikenai penalti detektor `-12 dB` sehingga tidak dapat menipu gerbang mikrofon untuk terbuka.
-- Saat pembicara utama sedang berbicara, **Wiener Spectral Subtraction** dan **Slew-Rate Transient De-Clicker** aktif mengupas bising latar secara simultan.
+### 2. Real RNNoise 0.2 WASM Neural Denoiser & ZCR Fusion
+- Menjalankan model **RNNoise 0.2** (`@jitsi/rnnoise-wasm`, Xiph.org *Recurrent Neural Network*) secara lokal dan *offline* di WebAssembly tanpa mengirim audio ke server mana pun.
+- Mengupas kebisingan non-manusia seperti suara bor, desis kipas, dan klik *mechanical keyboard* di 22 pita frekuensi **bahkan ketika Anda sedang berbicara**.
+- Dilengkapi *Zero-Crossing Rate* (`ZCR > 135`) + *Neural VAD Fusion* sehingga benda mati tidak menipu gerbang, serta *fallback* mulus ke *Wiener Spectral Subtraction* apabila WASM belum siap.
 
 ### 3. 5-Stage Studio HD Vocal Clarity Equalizer
 Secara otomatis menjernihkan karakter suara mikrofon bawaan laptop melalui 5 tahapan filter biquad:
@@ -142,6 +142,7 @@ dotnet publish windows/Opung.csproj -c Release -r win-x64 --self-contained true 
 │   └── demo-*.mp3                       # Audio demo Bahasa Indonesia asli
 ├── scripts/
 │   ├── build-dmg.mjs                    # Generator OPUNG-Installer.dmg lewat CLI
+│   ├── generate-rnnoise-bundle.mjs      # Pembungkus offline @jitsi/rnnoise-wasm (RNNoise 0.2)
 │   └── prepare-windows-assets.mjs       # Sinkronisasi index.html & AppIcon.ico ke project Windows
 ├── windows/
 │   ├── Opung.csproj                     # Project .NET 8 WinForms single-file (WebView2 + NAudio)
@@ -150,10 +151,13 @@ dotnet publish windows/Opung.csproj -c Release -r win-x64 --self-contained true 
 │   └── Resources/                       # Aset tersemat (AppIcon.ico & index.html)
 ├── src/
 │   ├── components/
-│   │   └── MacOSDesktopAppWorkspace.tsx # Mesin DSP WebAudio real-time & jendela kontrol Opung
+│   │   └── MacOSDesktopAppWorkspace.tsx # Mesin Hybrid RNNoise WASM + jendela kontrol Opung
 │   ├── utils/
 │   │   ├── audioDeviceFilters.ts        # Klasifikasi perangkat virtual mic (BlackHole 2ch & VB-CABLE)
+│   │   ├── hybridDspCore.ts             # Pure Hybrid DSP Core (RNNoise 0.2 + Proximity Gate)
 │   │   ├── macosAppBuilder.ts           # Generator Native macOS Cocoa/HAL & HFS+ .DMG Builder
+│   │   ├── rnnoiseEngine.ts             # Wrapper WASM @jitsi/rnnoise-wasm (lifecycle aman)
+│   │   ├── rnnoiseSyncInline.ts         # Bundle offline RNNoise 0.2 WASM untuk desktop app
 │   │   └── windowsAppBuilder.ts         # Generator .ICO & Windows Launcher .ZIP fallback
 │   ├── App.tsx                          # Halaman utama, pemutar uji banding & panduan macOS/Windows
 │   ├── main.tsx                         # Entry point aplikasi React

@@ -55,7 +55,7 @@ const DEMO_SCENARIOS: DemoScenario[] = [
     withoutOpungDesc:
       'Desis bor frekuensi tinggi dan klik ketikan keyboard menembus mikrofon bersamaan dengan kalimat Anda.',
     withOpungDesc:
-      'Detektor Formant + Wiener Spectral Subtraction mengupas bising bor & klik keyboard tanpa membuat vokal mendem.',
+      'Real RNNoise 0.2 WASM Neural Denoiser mengupas bising bor & klik keyboard saat Anda berbicara tanpa membuat vokal mendem.',
     beforeBars: [75, 84, 79, 94, 82, 77, 88, 96, 81, 74, 90, 83, 78, 89, 85, 76, 92, 80, 84, 88, 79, 75, 91, 82],
     afterBars: [6, 68, 58, 88, 6, 6, 74, 90, 6, 6, 82, 6, 6, 78, 64, 6, 85, 6, 6, 72, 6, 6, 80, 6],
   },
@@ -683,10 +683,10 @@ export default function App() {
             <div>
               <div className="text-xs text-slate-400 uppercase">Bising Saat Bicara</div>
               <div className="text-2xl sm:text-3xl font-bold text-emerald-400 mt-1 font-display">
-                Neural + Wiener
+                RNNoise 0.2 WASM
               </div>
               <div className="text-xs text-slate-400 mt-1">
-                Kupas suara bor, kipas &amp; ketikan keyboard
+                Neural denoiser mengupas bor, kipas &amp; ketikan keyboard
               </div>
             </div>
 
@@ -961,7 +961,7 @@ export default function App() {
                     Saat Anda diam, obrolan rekan kerja di meja sebelah (&ge; 1.5 meter) diputus
                     total ke <strong>0.00x</strong>. Dan ketika Anda sedang berbicara sambil ada
                     suara bor bangunan, deru kipas, atau ketikan keyboard di dekat Anda,{' '}
-                    <strong>4-Stage Neural &amp; Spectral Denoiser</strong> otomatis mengupas bising
+                    <strong>Hybrid RNNoise 0.2 WASM Neural Denoiser</strong> otomatis mengupas bising
                     non-manusia tersebut tanpa memotong kata-kata Anda.
                   </p>
                 </div>
@@ -1069,7 +1069,7 @@ export default function App() {
                       Suara bor, kipas &amp; ketikan keyboard saat Anda bicara
                     </td>
                     <td className="py-3.5 px-6 text-emerald-400 font-semibold">
-                      Dikupas via Neural NS + Wiener Subtraction
+                      Dikupas via Real RNNoise 0.2 WASM (Xiph.org)
                     </td>
                     <td className="py-3.5 px-6 text-slate-400">
                       Bocor begitu gerbang mikrofon terbuka
@@ -1102,7 +1102,7 @@ export default function App() {
                       Ukuran aplikasi &amp; privasi audio
                     </td>
                     <td className="py-3.5 px-6 text-emerald-400 font-semibold">
-                      Ringan (~50 KB), 100% diproses lokal di Mac Anda
+                      Ringan (&lt; 2.5 MB), 100% diproses lokal + offline RNNoise WASM
                     </td>
                     <td className="py-3.5 px-6 text-slate-400">
                       Bergantung pada koneksi server cloud
