@@ -5,6 +5,7 @@
  */
 
 import { RNNOISE_SYNC_INLINE_SCRIPT } from './rnnoiseSyncInline';
+import { OPUNG_WORKLET_PROCESSOR_BODY } from './opungWorkletBuilder';
 
 export interface MacOSFileSpec {
   filename: string;
@@ -217,6 +218,30 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       cursor: pointer;
       height: 4px;
     }
+    .cal-btn {
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: #7dd3fc;
+      border-radius: 5px;
+      padding: 2px 7px;
+      font-size: 9.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .cal-btn:hover { background: rgba(56, 189, 248, 0.22); }
+    .cal-btn.active {
+      background: rgba(245, 158, 11, 0.2);
+      border-color: rgba(251, 191, 36, 0.55);
+      color: #fcd34d;
+    }
+    .cal-note {
+      margin-top: 5px;
+      font-size: 9.5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #6ee7b7;
+      display: none;
+    }
 
     /* Compact Live Visualizer Card */
     .meter-card {
@@ -355,11 +380,14 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     </div>
   </div>
 
-  <!-- Radius Jarak (3 Pilihan Bersih) -->
+  <!-- Radius Jarak (3 Pilihan Bersih + Kalibrasi 3 Detik) -->
   <div class="radius-section">
     <div class="field-header" style="margin-bottom: 2px;">
       <span>Radius Fokus Suara</span>
-      <span id="dbValueText" class="field-status">-26 dB (&le; 1.0m)</span>
+      <span style="display:inline-flex;align-items:center;gap:6px;">
+        <button id="calibrateRoomBtn" class="cal-btn" type="button">Kalibrasi 3d</button>
+        <span id="dbValueText" class="field-status">-26 dB (&le; 1.0m)</span>
+      </span>
     </div>
     <div class="segmented-bar">
       <button id="preset05m" class="seg-btn" type="button">Dekat (0.5m)</button>
@@ -371,6 +399,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       <input id="thresholdSlider" type="range" min="-42" max="-14" step="1" value="-26" aria-label="Batas Sensitivitas Jarak" />
       <span>Ketat</span>
     </div>
+    <div id="calNoteText" class="cal-note"></div>
   </div>
 
   <!-- Grafik Visualizer Bersih -->
@@ -401,8 +430,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
   <audio id="virtualCableAudioOut" playsinline muted></audio>
   <audio id="earphoneLoopbackOut" playsinline muted></audio>
 
-  <script>` + RNNOISE_SYNC_INLINE_SCRIPT + `</script>
+  <script id="opung-rnnoise-src">` + RNNOISE_SYNC_INLINE_SCRIPT + `</script>
   <script>
+    const OPUNG_WORKLET_BODY = ` + JSON.stringify(OPUNG_WORKLET_PROCESSOR_BODY).replace(/<\//g, '<\\/') + `;
     const RNNOISE_FRAME_SIZE = 480;
     const RING_CAPACITY = 4096;
     const PCM16_SCALE = 32768.0;
@@ -693,6 +723,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     const virtualOutputSelect = document.getElementById('virtualOutputSelect');
     const sinkBadge = document.getElementById('sinkBadge');
     const dbValueText = document.getElementById('dbValueText');
+    const calibrateRoomBtn = document.getElementById('calibrateRoomBtn');
+    const calNoteText = document.getElementById('calNoteText');
     const thresholdSlider = document.getElementById('thresholdSlider');
     const preset05m = document.getElementById('preset05m');
     const preset1m = document.getElementById('preset1m');
@@ -720,6 +752,32 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let currentCleanStream = null;
     let selectedVirtualSinkId = '';
     let nativeCoreAudioSinkActive = false;
+    let activeWorkletNode = null;
+    let activeAudioEngineMode = 'script';
+    const workletStats = {
+      frameDb: -75,
+      vadProb: 0,
+      isGateOpen: false,
+      smoothedGain: 0,
+      rnnoiseActive: false,
+    };
+    let calibrationTimer = null;
+    let calibrationTimeout = null;
+
+    function syncStandaloneWorkletConfig() {
+      if (activeWorkletNode && activeWorkletNode.port) {
+        try {
+          activeWorkletNode.port.postMessage({
+            type: 'config',
+            enabled: isEnabled,
+            thresholdDb,
+            krispMode: true,
+            isLoopbackTest: loopbackAudible,
+            needPcmStream: nativeCoreAudioSinkActive && hasNativeCoreAudioBridge(),
+          });
+        } catch (_e) {}
+      }
+    }
 
     const isWindowsPlatform = /windows|win32|win64/i.test(navigator.userAgent || '');
 
@@ -877,6 +935,57 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       thresholdSlider.value = String(db);
       const label = db >= -22 ? '<= 0.5m' : db >= -30 ? '<= 1.0m' : '> 1.5m';
       dbValueText.textContent = db + ' dB (' + label + ')';
+      syncStandaloneWorkletConfig();
+    }
+
+    function computeStandaloneCalibrationThreshold(rawSamples) {
+      const valid = rawSamples.filter((v) => Number.isFinite(v) && v >= -95 && v <= 0);
+      if (valid.length < 3) {
+        return { threshold: -26, p90: -32 };
+      }
+      valid.sort((a, b) => a - b);
+      const p90Idx = Math.min(valid.length - 1, Math.floor(0.9 * (valid.length - 1)));
+      const p90 = Math.round(valid[p90Idx]);
+      const rec = Math.max(-36, Math.min(-16, p90 + 6));
+      return { threshold: rec, p90 };
+    }
+
+    if (calibrateRoomBtn) {
+      calibrateRoomBtn.addEventListener('click', () => {
+        if (calibrationTimer) clearInterval(calibrationTimer);
+        if (calibrationTimeout) clearTimeout(calibrationTimeout);
+        const samples = [];
+        const startedAt = Date.now();
+        calibrateRoomBtn.disabled = true;
+        calibrateRoomBtn.className = 'cal-btn active';
+        calibrateRoomBtn.textContent = 'Mengukur 3s...';
+        if (calNoteText) {
+          calNoteText.style.display = 'block';
+          calNoteText.textContent = 'Diam sejenak (3 dtk) mengukur kebisingan ruangan...';
+          fitNativeWindowHeight();
+        }
+        calibrationTimer = setInterval(() => {
+          const curDb = activeAudioEngineMode === 'worklet' ? workletStats.frameDb : dspCore.lastFrameDb;
+          if (Number.isFinite(curDb)) samples.push(curDb);
+          const rem = Math.max(1, Math.ceil((3000 - (Date.now() - startedAt)) / 1000));
+          calibrateRoomBtn.textContent = 'Mengukur ' + rem + 's...';
+        }, 60);
+        calibrationTimeout = setTimeout(() => {
+          if (calibrationTimer) clearInterval(calibrationTimer);
+          calibrationTimer = null;
+          calibrationTimeout = null;
+          const res = computeStandaloneCalibrationThreshold(samples);
+          updateThresholdUI(res.threshold);
+          calibrateRoomBtn.disabled = false;
+          calibrateRoomBtn.className = 'cal-btn';
+          calibrateRoomBtn.textContent = 'Kalibrasi 3d';
+          if (calNoteText) {
+            calNoteText.style.display = 'block';
+            calNoteText.textContent = 'Ideal: ' + res.threshold + ' dB (bising ' + res.p90 + ' dB)';
+            fitNativeWindowHeight();
+          }
+        }, 3000);
+      });
     }
 
     preset05m.addEventListener('click', () => updateThresholdUI(-20));
@@ -886,6 +995,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     heroSwitchCard.addEventListener('click', () => {
       isEnabled = !isEnabled;
+      syncStandaloneWorkletConfig();
       if (isEnabled) {
         heroSwitchCard.className = 'hero-switch-card active';
         toggleBtn.className = 'toggle-track active';
@@ -933,6 +1043,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     loopbackBtn.addEventListener('click', async () => {
       loopbackAudible = !loopbackAudible;
+      syncStandaloneWorkletConfig();
       // PENTING: JANGAN PERNAH mematikan echoCancellation saat Tes Dengar Suara Sendiri!
       // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
       if (activeMakeupGainNode && audioCtx) {
@@ -994,6 +1105,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       ) {
         appliedVirtualSinkId = '';
         nativeCoreAudioSinkActive = false;
+        syncStandaloneWorkletConfig();
         sendNativeBridgeCommand('SINK:OFF');
         virtualCableAudioOut.muted = true;
         virtualCableAudioOut.volume = 0;
@@ -1011,6 +1123,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       // Jika berjalan di dalam aplikasi native macOS (WKWebView) atau Windows (WebView2), jembatan audio native langsung menulis ke BlackHole 2ch / VB-CABLE!
       if (hasNativeCoreAudioBridge()) {
         nativeCoreAudioSinkActive = true;
+        syncStandaloneWorkletConfig();
         sendNativeBridgeCommand('SINK:ON');
       }
 
@@ -1195,6 +1308,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     window.addEventListener('beforeunload', () => {
       audioPipelineSessionId += 1;
+      if (activeWorkletNode && activeWorkletNode.port) {
+        try { activeWorkletNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
+      }
       if (dspCore && typeof dspCore.destroy === 'function') {
         dspCore.destroy();
       }
@@ -1203,6 +1319,12 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     async function startMacAudioPipeline(selectedInputId) {
       const sessionId = ++audioPipelineSessionId;
       try {
+        if (activeWorkletNode) {
+          try { activeWorkletNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
+          activeWorkletNode.port.onmessage = null;
+          activeWorkletNode.disconnect();
+          activeWorkletNode = null;
+        }
         if (window.__opungProcessorNode) {
           window.__opungProcessorNode.onaudioprocess = null;
           window.__opungProcessorNode.disconnect();
@@ -1360,49 +1482,114 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.65;
         activeMakeupGainNode = makeupGainNode;
 
-        const processorNode = audioCtx.createScriptProcessor(512, 1, 1);
-        window.__opungProcessorNode = processorNode;
-        dspCore = new NearFieldRNNoiseDspCore();
-
-        createStandaloneRnnoiseEngine()
-          .then((engine) => {
-            if (audioPipelineSessionId !== sessionId) {
-              engine.destroy();
-              return;
+        let processingNode = null;
+        const rnnoiseScriptEl = document.getElementById('opung-rnnoise-src');
+        if (
+          audioCtx.audioWorklet &&
+          typeof AudioWorkletNode !== 'undefined' &&
+          rnnoiseScriptEl &&
+          rnnoiseScriptEl.textContent
+        ) {
+          try {
+            const workletCode = rnnoiseScriptEl.textContent + '\\n' + OPUNG_WORKLET_BODY;
+            const workletBlob = new Blob([workletCode], { type: 'application/javascript' });
+            const workletUrl = URL.createObjectURL(workletBlob);
+            try {
+              await audioCtx.audioWorklet.addModule(workletUrl);
+            } finally {
+              URL.revokeObjectURL(workletUrl);
             }
-            dspCore.setRnnoiseEngine(engine);
-            const badge = document.getElementById('engineStatus');
-            if (badge) {
-              badge.textContent = 'RNNoise 0.2 WASM · Aktif';
-            }
-          })
-          .catch(() => {});
+            if (audioPipelineSessionId !== sessionId) return;
 
-        const pcm16Scratch = new Int16Array(512);
-        const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
-
-        processorNode.onaudioprocess = (ev) => {
-          const inBuf = ev.inputBuffer.getChannelData(0);
-          const outBuf = ev.outputBuffer.getChannelData(0);
-          dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
-          const isMutedByGate = isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0;
-          hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
-
-          // Kirim langsung dari processorNode utama (yang dijamin selalu ditarik oleh cleanAnalyser) ke jembatan CoreAudio HAL BlackHole 2ch!
-          if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
-            const vocalBoost = loopbackAudible ? 1.15 : 1.85;
-            for (let i = 0; i < outBuf.length; i++) {
-              const rawSample = isMutedByGate ? 0.0 : outBuf[i] * vocalBoost;
-              const clipped = Math.tanh(rawSample);
-              pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
-            }
-            let bin = '';
-            for (let j = 0; j < uint8Scratch.length; j++) {
-              bin += String.fromCharCode(uint8Scratch[j]);
-            }
-            sendNativeBridgeCommand(btoa(bin));
+            const workletNode = new AudioWorkletNode(audioCtx, 'opung-hybrid-processor', {
+              numberOfInputs: 1,
+              numberOfOutputs: 1,
+              outputChannelCount: [1],
+            });
+            workletNode.port.onmessage = (ev) => {
+              if (audioPipelineSessionId !== sessionId) return;
+              const msg = ev.data;
+              if (!msg || typeof msg !== 'object') return;
+              if (msg.type === 'ready') {
+                workletStats.rnnoiseActive = Boolean(msg.rnnoiseActive);
+                const badge = document.getElementById('engineStatus');
+                if (badge) {
+                  badge.textContent = msg.rnnoiseActive
+                    ? 'AudioWorklet · RNNoise 0.2'
+                    : 'AudioWorklet · Hybrid Gate';
+                }
+              } else if (msg.type === 'stats') {
+                workletStats.frameDb = typeof msg.frameDb === 'number' ? msg.frameDb : -75;
+                workletStats.vadProb = typeof msg.vadProb === 'number' ? msg.vadProb : 0;
+                workletStats.isGateOpen = Boolean(msg.isGateOpen);
+                workletStats.smoothedGain = typeof msg.smoothedGain === 'number' ? msg.smoothedGain : 0;
+                workletStats.rnnoiseActive = Boolean(msg.rnnoiseActive);
+                const isMutedByGate = isEnabled && !workletStats.isGateOpen && workletStats.smoothedGain === 0.0;
+                hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
+              } else if (msg.type === 'pcm' && msg.buffer && nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
+                const bytes = new Uint8Array(msg.buffer);
+                let bin = '';
+                for (let j = 0; j < bytes.length; j++) {
+                  bin += String.fromCharCode(bytes[j]);
+                }
+                sendNativeBridgeCommand(btoa(bin));
+              }
+            };
+            activeWorkletNode = workletNode;
+            activeAudioEngineMode = 'worklet';
+            syncStandaloneWorkletConfig();
+            processingNode = workletNode;
+          } catch (_workletErr) {
+            processingNode = null;
           }
-        };
+        }
+
+        if (!processingNode) {
+          activeAudioEngineMode = 'script';
+          const processorNode = audioCtx.createScriptProcessor(512, 1, 1);
+          window.__opungProcessorNode = processorNode;
+          dspCore = new NearFieldRNNoiseDspCore();
+
+          createStandaloneRnnoiseEngine()
+            .then((engine) => {
+              if (audioPipelineSessionId !== sessionId) {
+                engine.destroy();
+                return;
+              }
+              dspCore.setRnnoiseEngine(engine);
+              const badge = document.getElementById('engineStatus');
+              if (badge) {
+                badge.textContent = 'RNNoise 0.2 WASM · Aktif';
+              }
+            })
+            .catch(() => {});
+
+          const pcm16Scratch = new Int16Array(512);
+          const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
+
+          processorNode.onaudioprocess = (ev) => {
+            const inBuf = ev.inputBuffer.getChannelData(0);
+            const outBuf = ev.outputBuffer.getChannelData(0);
+            dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
+            const isMutedByGate = isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0;
+            hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
+
+            if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
+              const vocalBoost = loopbackAudible ? 1.15 : 1.85;
+              for (let i = 0; i < outBuf.length; i++) {
+                const rawSample = isMutedByGate ? 0.0 : outBuf[i] * vocalBoost;
+                const clipped = Math.tanh(rawSample);
+                pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
+              }
+              let bin = '';
+              for (let j = 0; j < uint8Scratch.length; j++) {
+                bin += String.fromCharCode(uint8Scratch[j]);
+              }
+              sendNativeBridgeCommand(btoa(bin));
+            }
+          };
+          processingNode = processorNode;
+        }
 
         const cleanDest = audioCtx.createMediaStreamDestination();
         try {
@@ -1425,8 +1612,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         keepAliveGain.gain.value = 0.0;
 
         sourceNode.connect(rawAnalyser);
-        rawAnalyser.connect(processorNode);
-        processorNode.connect(subCutNode);
+        rawAnalyser.connect(processingNode);
+        processingNode.connect(subCutNode);
         subCutNode.connect(krispLowPassNode);
         krispLowPassNode.connect(mudCutNode);
         mudCutNode.connect(warmthNode);
@@ -1455,9 +1642,15 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           earphoneLoopbackOut.srcObject = null;
         }
 
-        document.getElementById('engineStatus').textContent = dspCore.isRnnoiseActive
-          ? 'RNNoise 0.2 WASM · Aktif'
-          : 'Hybrid RNNoise WASM + Gate 1.0m';
+        if (activeAudioEngineMode === 'worklet') {
+          document.getElementById('engineStatus').textContent = workletStats.rnnoiseActive
+            ? 'AudioWorklet · RNNoise 0.2'
+            : 'AudioWorklet · Hybrid Gate';
+        } else {
+          document.getElementById('engineStatus').textContent = dspCore.isRnnoiseActive
+            ? 'RNNoise 0.2 WASM · Aktif'
+            : 'Hybrid RNNoise WASM + Gate 1.0m';
+        }
         await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
       } catch (err) {
         document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
@@ -1537,16 +1730,19 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
           ctx.fillRect(i * barWidth + 2.5, h - cH, barWidth - 5, cH);
         }
 
+        const curGain = activeAudioEngineMode === 'worklet' ? workletStats.smoothedGain : dspCore.smoothedGain;
+        const curGateOpen = activeAudioEngineMode === 'worklet' ? workletStats.isGateOpen : dspCore.isGateOpen;
+
         rawPctEl.textContent = Math.round((rSum / (barCount * 255)) * 100) + '%';
         cleanPctEl.textContent = Math.round((cSum / (barCount * 255)) * 100) + '%';
-        gainLabel.textContent = 'Gain: ' + dspCore.smoothedGain.toFixed(2) + 'x';
+        gainLabel.textContent = 'Gain: ' + curGain.toFixed(2) + 'x';
 
         if (!isEnabled) {
           gateStatusBadge.style.color = '#94a3b8';
           gateStatusBadge.textContent = 'Bypass · 1.00x';
-        } else if (dspCore.isGateOpen) {
+        } else if (curGateOpen) {
           gateStatusBadge.style.color = '#34d399';
-          gateStatusBadge.textContent = 'Suara Jernih · ' + dspCore.smoothedGain.toFixed(2) + 'x';
+          gateStatusBadge.textContent = 'Suara Jernih · ' + curGain.toFixed(2) + 'x';
         } else {
           gateStatusBadge.style.color = '#38bdf8';
           gateStatusBadge.textContent = 'Bising Dibungkam · 0.00x';

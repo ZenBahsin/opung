@@ -5,8 +5,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { MacOSDesktopAppWorkspace } from './components/MacOSDesktopAppWorkspace';
-import { buildMacOSDiskImageDmg } from './utils/macosAppBuilder';
-import { downloadWindowsOpungApp } from './utils/windowsAppBuilder';
 import heroStudioImg from './assets/images/opung_hero_studio_1794304548452.jpg';
 import acousticRadiusImg from './assets/images/opung_acoustic_radius_1794304549629.jpg';
 import vocalEqImg from './assets/images/opung_vocal_eq_1794304549883.jpg';
@@ -89,9 +87,8 @@ export default function App() {
   const [demoTick, setDemoTick] = useState<number>(0);
 
   const demoAudioCtxRef = useRef<AudioContext | null>(null);
-  const demoNoiseGainRef = useRef<GainNode | null>(null);
-  const demoVoicePresenceRef = useRef<BiquadFilterNode | null>(null);
-  const demoVoiceWarmthRef = useRef<BiquadFilterNode | null>(null);
+  const demoRawBranchGainRef = useRef<GainNode | null>(null);
+  const demoCleanBranchGainRef = useRef<GainNode | null>(null);
   const demoTimerRef = useRef<number | null>(null);
   const isPlayingDemoRef = useRef<boolean>(false);
   const demoOpungActiveRef = useRef<boolean>(demoOpungActive);
@@ -138,9 +135,8 @@ export default function App() {
       demoAudioCtxRef.current.close().catch(() => {});
       demoAudioCtxRef.current = null;
     }
-    demoNoiseGainRef.current = null;
-    demoVoicePresenceRef.current = null;
-    demoVoiceWarmthRef.current = null;
+    demoRawBranchGainRef.current = null;
+    demoCleanBranchGainRef.current = null;
     setIsPlayingDemo(false);
   };
 
@@ -150,30 +146,23 @@ export default function App() {
     };
   }, []);
 
-  // Dynamically update background noise gain & Studio HD Vocal EQ when user flips Tanpa OPUNG vs OPUNG Aktif
+  // Crossfade sinkron antara sinyal mentah vs output Hybrid RNNoise 0.2 WASM + Studio HD EQ
   useEffect(() => {
     const ctx = demoAudioCtxRef.current;
     if (!ctx) return;
     const now = ctx.currentTime;
-    if (demoNoiseGainRef.current) {
-      demoNoiseGainRef.current.gain.setTargetAtTime(
-        demoOpungActive ? 0.0 : 0.65,
+    if (demoRawBranchGainRef.current) {
+      demoRawBranchGainRef.current.gain.setTargetAtTime(
+        demoOpungActive ? 0.0 : 1.0,
         now,
-        0.035
+        0.03
       );
     }
-    if (demoVoicePresenceRef.current) {
-      demoVoicePresenceRef.current.gain.setTargetAtTime(
-        demoOpungActive ? 3.5 : -2.5,
+    if (demoCleanBranchGainRef.current) {
+      demoCleanBranchGainRef.current.gain.setTargetAtTime(
+        demoOpungActive ? 1.0 : 0.0,
         now,
-        0.04
-      );
-    }
-    if (demoVoiceWarmthRef.current) {
-      demoVoiceWarmthRef.current.gain.setTargetAtTime(
-        demoOpungActive ? 2.5 : -1.5,
-        now,
-        0.04
+        0.03
       );
     }
   }, [demoOpungActive]);
@@ -204,7 +193,7 @@ export default function App() {
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
-      const ctx = new AudioCtx();
+      const ctx = new AudioCtx({ sampleRate: 48000 });
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
@@ -218,6 +207,9 @@ export default function App() {
         'speaker-echo': '/demo-voice-speaker-echo.mp3',
       };
 
+      const [{ resampleLinearTo48k, renderHybridDemoComparison, DEMO_DSP_SAMPLE_RATE }] =
+        await Promise.all([import('./utils/demoDspProcessor')]);
+
       const voiceBuffer =
         (await loadAudioBuffer(ctx, voiceUrlMap[scenarioId])) ||
         (await loadAudioBuffer(ctx, '/demo-voice-id.mp3'));
@@ -226,66 +218,26 @@ export default function App() {
         return;
       }
 
-      // Master Noise / Interference Gain (0.0 saat OPUNG Aktif, 0.65 saat Tanpa OPUNG)
-      const noiseGain = ctx.createGain();
-      noiseGain.gain.value = demoOpungActiveRef.current ? 0.0 : 0.65;
-      demoNoiseGainRef.current = noiseGain;
-      noiseGain.connect(ctx.destination);
+      const voice48k = voiceBuffer
+        ? resampleLinearTo48k(voiceBuffer.getChannelData(0), voiceBuffer.sampleRate)
+        : new Float32Array(DEMO_DSP_SAMPLE_RATE * 4);
+      const totalSamples = Math.max(voice48k.length, DEMO_DSP_SAMPLE_RATE * 4);
+      const rawMixed48k = new Float32Array(totalSamples);
 
-      // 1. Putar Rekaman Suara Manusia Bahasa Indonesia Asli (Vokal Utama <= 1.0m)
-      let voiceSourceNode: AudioBufferSourceNode | null = null;
-      if (voiceBuffer) {
-        const voiceSource = ctx.createBufferSource();
-        voiceSource.buffer = voiceBuffer;
-        voiceSource.loop = true;
-
-        const voiceWarmth = ctx.createBiquadFilter();
-        voiceWarmth.type = 'peaking';
-        voiceWarmth.frequency.value = 210;
-        voiceWarmth.Q.value = 1.1;
-        voiceWarmth.gain.value = demoOpungActiveRef.current ? 2.5 : -1.5;
-        demoVoiceWarmthRef.current = voiceWarmth;
-
-        const voicePresence = ctx.createBiquadFilter();
-        voicePresence.type = 'peaking';
-        voicePresence.frequency.value = 3200;
-        voicePresence.Q.value = 1.2;
-        voicePresence.gain.value = demoOpungActiveRef.current ? 3.5 : -2.5;
-        demoVoicePresenceRef.current = voicePresence;
-
-        const voiceMasterGain = ctx.createGain();
-        voiceMasterGain.gain.value = 1.05;
-
-        voiceSource.connect(voiceWarmth);
-        voiceWarmth.connect(voicePresence);
-        voicePresence.connect(voiceMasterGain);
-        voiceMasterGain.connect(ctx.destination);
-
-        voiceSource.start(0);
-        voiceSourceNode = voiceSource;
+      for (let i = 0; i < totalSamples; i++) {
+        rawMixed48k[i] = voice48k[i % voice48k.length];
       }
 
-      // 2. Bangun Suara Pengganggu Latar Sesuai Skenario (Tanpa Nada Robot / Sine Oscillator)
       if (scenarioId === 'office-chatter') {
-        // Skenario 1: Suara rekan kerja mengobrol di meja sebelah (> 1.5 meter) + suasana ruang kantor
         const chatterBuffer = await loadAudioBuffer(ctx, '/demo-bg-chatter.mp3');
-        if (chatterBuffer && isPlayingDemoRef.current && demoAudioCtxRef.current === ctx) {
-          const chatterSource = ctx.createBufferSource();
-          chatterSource.buffer = chatterBuffer;
-          chatterSource.loop = true;
-
-          const chatterGain = ctx.createGain();
-          chatterGain.gain.value = 0.85;
-          chatterSource.connect(chatterGain);
-          chatterGain.connect(noiseGain);
-          chatterSource.start(0);
+        if (!isPlayingDemoRef.current || demoAudioCtxRef.current !== ctx) {
+          return;
         }
-
-        // Tambahan desis AC ruangan kantor halus (1/f Pink Noise murni tanpa nada)
-        const roomBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
-        const roomData = roomBuf.getChannelData(0);
+        const chatter48k = chatterBuffer
+          ? resampleLinearTo48k(chatterBuffer.getChannelData(0), chatterBuffer.sampleRate)
+          : null;
         let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-        for (let i = 0; i < roomData.length; i++) {
+        for (let i = 0; i < totalSamples; i++) {
           const white = Math.random() * 2 - 1;
           b0 = 0.99886 * b0 + white * 0.0555179;
           b1 = 0.99332 * b1 + white * 0.0750759;
@@ -293,21 +245,15 @@ export default function App() {
           b3 = 0.86650 * b3 + white * 0.3104856;
           b4 = 0.55000 * b4 + white * 0.5329522;
           b5 = -0.7616 * b5 - white * 0.0168980;
-          roomData[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.025;
+          const roomAc = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.022;
           b6 = white * 0.115926;
+          const distantChatter = chatter48k ? chatter48k[i % chatter48k.length] * 0.42 : 0;
+          rawMixed48k[i] = Math.max(-0.98, Math.min(0.98, rawMixed48k[i] + distantChatter + roomAc));
         }
-        const roomSource = ctx.createBufferSource();
-        roomSource.buffer = roomBuf;
-        roomSource.loop = true;
-        roomSource.connect(noiseGain);
-        roomSource.start(0);
       } else if (scenarioId === 'drill-keyboard') {
-        // Skenario 2: Ketikan mechanical keyboard cepat + deru kipas/konstruksi akustik (murni transien tanpa sine wave)
-        const kbBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
-        const kbData = kbBuf.getChannelData(0);
         let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
         let brown = 0;
-        for (let i = 0; i < kbData.length; i++) {
+        for (let i = 0; i < totalSamples; i++) {
           const white = Math.random() * 2 - 1;
           b0 = 0.99886 * b0 + white * 0.0555179;
           b1 = 0.99332 * b1 + white * 0.0750759;
@@ -315,63 +261,106 @@ export default function App() {
           b3 = 0.86650 * b3 + white * 0.3104856;
           b4 = 0.55000 * b4 + white * 0.5329522;
           b5 = -0.7616 * b5 - white * 0.0168980;
-          const pink = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.04;
+          const pink = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.036;
           b6 = white * 0.115926;
           brown = (brown + 0.02 * white) / 1.02;
 
-          const tSec = i / ctx.sampleRate;
-          // Pola ketikan tombol mechanical switch (klik tajam + bottom-out thock)
+          const tSec = i / DEMO_DSP_SAMPLE_RATE;
           const stepRate = 6.8;
           const keyIdx = Math.floor(tSec * stepRate);
           const keyPhase = tSec * stepRate - keyIdx;
           const activeKey = (keyIdx * 13 + 5) % 4 !== 0;
-          const clickSwitch = activeKey && keyPhase < 0.008 ? Math.exp(-keyPhase * 450) * 0.65 : 0;
-          const bottomOut = activeKey && keyPhase >= 0.008 && keyPhase < 0.035 ? Math.exp(-(keyPhase - 0.008) * 140) * 0.45 : 0;
-
-          kbData[i] = pink * 0.75 + brown * 0.32 + white * clickSwitch + pink * 8.0 * bottomOut;
+          const clickSwitch = activeKey && keyPhase < 0.008 ? Math.exp(-keyPhase * 450) * 0.42 : 0;
+          const bottomOut =
+            activeKey && keyPhase >= 0.008 && keyPhase < 0.035
+              ? Math.exp(-(keyPhase - 0.008) * 140) * 0.28
+              : 0;
+          const drillMix = pink * 0.58 + brown * 0.24 + white * clickSwitch + pink * 6.5 * bottomOut;
+          rawMixed48k[i] = Math.max(-0.98, Math.min(0.98, rawMixed48k[i] + drillMix));
         }
-        const kbSource = ctx.createBufferSource();
-        kbSource.buffer = kbBuf;
-        kbSource.loop = true;
-
-        const kbFilter = ctx.createBiquadFilter();
-        kbFilter.type = 'bandpass';
-        kbFilter.frequency.value = 1400;
-        kbFilter.Q.value = 0.6;
-
-        kbSource.connect(kbFilter);
-        kbFilter.connect(noiseGain);
-        kbSource.start(0);
       } else {
-        // Skenario 3: Bocor Suara Speaker Laptop (Echo / Pantulan Gema Ruangan Nyata dari Suara Pembicara)
-        if (voiceSourceNode) {
-          const delay1 = ctx.createDelay(1.0);
-          delay1.delayTime.value = 0.145; // Pantulan dinding 145ms
-
-          const delay2 = ctx.createDelay(1.0);
-          delay2.delayTime.value = 0.275; // Pantulan sudut ruangan 275ms
-
-          const echoFilter = ctx.createBiquadFilter();
-          echoFilter.type = 'bandpass';
-          echoFilter.frequency.value = 850;
-          echoFilter.Q.value = 0.9;
-
-          const echoGain1 = ctx.createGain();
-          echoGain1.gain.value = 0.55;
-
-          const echoGain2 = ctx.createGain();
-          echoGain2.gain.value = 0.35;
-
-          voiceSourceNode.connect(delay1);
-          delay1.connect(echoFilter);
-          echoFilter.connect(echoGain1);
-          echoGain1.connect(noiseGain);
-
-          voiceSourceNode.connect(delay2);
-          delay2.connect(echoGain2);
-          echoGain2.connect(noiseGain);
+        // Skenario 3: Suntikkan pantulan gema speaker laptop (145ms + 275ms) langsung ke sinyal mentah 48 kHz
+        const delay1 = Math.round(0.145 * DEMO_DSP_SAMPLE_RATE);
+        const delay2 = Math.round(0.275 * DEMO_DSP_SAMPLE_RATE);
+        const srcCopy = new Float32Array(rawMixed48k);
+        let lpEcho = 0;
+        for (let i = 0; i < totalSamples; i++) {
+          const e1 = i >= delay1 ? srcCopy[i - delay1] * 0.46 : 0;
+          const e2 = i >= delay2 ? srcCopy[i - delay2] * 0.28 : 0;
+          lpEcho += 0.24 * (e1 + e2 - lpEcho);
+          rawMixed48k[i] = Math.max(-0.98, Math.min(0.98, srcCopy[i] + lpEcho));
         }
       }
+
+      // Render nyata output Hybrid RNNoise 0.2 WASM + Proximity Gate pada sinyal 48 kHz
+      const { raw, cleaned } = await renderHybridDemoComparison(
+        rawMixed48k,
+        scenarioId === 'office-chatter' ? -24 : -26,
+        scenarioId === 'speaker-echo'
+      );
+
+      if (!isPlayingDemoRef.current || demoAudioCtxRef.current !== ctx) {
+        return;
+      }
+
+      const rawBuf = ctx.createBuffer(1, raw.length, DEMO_DSP_SAMPLE_RATE);
+      rawBuf.getChannelData(0).set(raw);
+
+      const cleanBuf = ctx.createBuffer(1, cleaned.length, DEMO_DSP_SAMPLE_RATE);
+      cleanBuf.getChannelData(0).set(cleaned);
+
+      const rawSource = ctx.createBufferSource();
+      rawSource.buffer = rawBuf;
+      rawSource.loop = true;
+
+      const cleanSource = ctx.createBufferSource();
+      cleanSource.buffer = cleanBuf;
+      cleanSource.loop = true;
+
+      const rawBranchGain = ctx.createGain();
+      rawBranchGain.gain.value = demoOpungActiveRef.current ? 0.0 : 1.0;
+      demoRawBranchGainRef.current = rawBranchGain;
+
+      // Jalur Opung Aktif juga menerapkan Studio HD Vocal EQ persis seperti di aplikasi desktop
+      const eqSubCut = ctx.createBiquadFilter();
+      eqSubCut.type = 'highpass';
+      eqSubCut.frequency.value = 85;
+
+      const eqMudCut = ctx.createBiquadFilter();
+      eqMudCut.type = 'peaking';
+      eqMudCut.frequency.value = 260;
+      eqMudCut.Q.value = 1.4;
+      eqMudCut.gain.value = -2.4;
+
+      const eqWarmth = ctx.createBiquadFilter();
+      eqWarmth.type = 'peaking';
+      eqWarmth.frequency.value = 180;
+      eqWarmth.Q.value = 1.1;
+      eqWarmth.gain.value = 2.0;
+
+      const eqPresence = ctx.createBiquadFilter();
+      eqPresence.type = 'peaking';
+      eqPresence.frequency.value = 3400;
+      eqPresence.Q.value = 1.1;
+      eqPresence.gain.value = 3.5;
+
+      const cleanBranchGain = ctx.createGain();
+      cleanBranchGain.gain.value = demoOpungActiveRef.current ? 1.0 : 0.0;
+      demoCleanBranchGainRef.current = cleanBranchGain;
+
+      rawSource.connect(rawBranchGain);
+      rawBranchGain.connect(ctx.destination);
+
+      cleanSource.connect(eqSubCut);
+      eqSubCut.connect(eqMudCut);
+      eqMudCut.connect(eqWarmth);
+      eqWarmth.connect(eqPresence);
+      eqPresence.connect(cleanBranchGain);
+      cleanBranchGain.connect(ctx.destination);
+
+      const startAt = ctx.currentTime + 0.02;
+      rawSource.start(startAt);
+      cleanSource.start(startAt);
 
       // Animasi grafik spektrum selaras dengan irama suku kata bicara manusia
       let step = 0;
@@ -399,10 +388,11 @@ export default function App() {
     }
   };
 
-  // Satu Pintu Unduhan: Langsung OPUNG-Installer.dmg
-  const handleDownloadMacOSApp = () => {
+  // Satu Pintu Unduhan: Langsung OPUNG-Installer.dmg (Lazy-loaded agar landing page super cepat)
+  const handleDownloadMacOSApp = async () => {
     setIsDownloadingDmg(true);
     try {
+      const { buildMacOSDiskImageDmg } = await import('./utils/macosAppBuilder');
       const dmgBuffer = buildMacOSDiskImageDmg();
       const blob = new Blob([dmgBuffer], {
         type: 'application/x-apple-diskimage',
@@ -424,6 +414,7 @@ export default function App() {
   const handleDownloadWindowsApp = async () => {
     setIsDownloadingWin(true);
     try {
+      const { downloadWindowsOpungApp } = await import('./utils/windowsAppBuilder');
       const result = await downloadWindowsOpungApp();
       setWinDownloadedNotice(result.mode);
     } finally {

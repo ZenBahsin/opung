@@ -164,21 +164,39 @@ export interface WindowsDownloadResult {
   filename: string;
 }
 
+export function isExternalHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
+function triggerDirectUrlDownload(url: string, filename: string): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener noreferrer';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 export async function downloadWindowsOpungApp(): Promise<WindowsDownloadResult> {
   const candidates = getWindowsExeDownloadCandidates();
 
   for (const url of candidates) {
+    // URL eksternal (mis. GitHub Releases) memblokir preflight CORS HEAD -> unduh langsung
+    if (isExternalHttpUrl(url)) {
+      triggerDirectUrlDownload(url, 'Opung-Windows-x64.exe');
+      return {
+        mode: 'exe',
+        filename: 'Opung-Windows-x64.exe',
+      };
+    }
+
     try {
       const response = await fetch(url, { method: 'HEAD' });
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       // Pastikan respons bukan halaman SPA HTML fallback dari Vite dev server
       if (response.ok && !contentType.includes('text/html')) {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'Opung-Windows-x64.exe';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        triggerDirectUrlDownload(url, 'Opung-Windows-x64.exe');
         return {
           mode: 'exe',
           filename: 'Opung-Windows-x64.exe',

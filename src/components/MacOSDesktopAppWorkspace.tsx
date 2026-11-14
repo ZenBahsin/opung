@@ -12,12 +12,6 @@ import {
   EyeOff,
 } from 'lucide-react';
 import {
-  buildMacOSDiskImageDmg,
-} from '../utils/macosAppBuilder';
-import {
-  downloadWindowsOpungApp,
-} from '../utils/windowsAppBuilder';
-import {
   isDeprecatedOpungDriverLabel,
   isVirtualCableLabel,
   isAnyVirtualOrDeprecatedInputLabel,
@@ -29,8 +23,9 @@ import {
   NearFieldHybridDspCore,
 } from '../utils/hybridDspCore';
 import {
-  createRnnoiseWasmProcessor,
-} from '../utils/rnnoiseEngine';
+  CALIBRATION_DURATION_MS,
+  computeRecommendedThresholdDb,
+} from '../utils/roomCalibration';
 
 export const MacOSDesktopAppWorkspace: React.FC = () => {
   // Real-Time macOS App State
@@ -54,8 +49,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     detail: string;
   } | null>(null);
   const [isDownloadingWin, setIsDownloadingWin] = useState<boolean>(false);
+  const [isDownloadingDmg, setIsDownloadingDmg] = useState<boolean>(false);
 
   const [rnnoiseReady, setRnnoiseReady] = useState<boolean>(false);
+  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
+  const [calibrationSecLeft, setCalibrationSecLeft] = useState<number>(0);
+  const [calibrationNote, setCalibrationNote] = useState<string | null>(null);
   const [liveStats, setLiveStats] = useState<{
     rawPct: number;
     cleanPct: number;
@@ -96,6 +95,23 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   const earphoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const cleanStreamRef = useRef<MediaStream | null>(null);
   const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const audioModeRef = useRef<'worklet' | 'script'>('script');
+  const workletStatsRef = useRef<{
+    frameDb: number;
+    vadProb: number;
+    isGateOpen: boolean;
+    smoothedGain: number;
+    rnnoiseActive: boolean;
+  }>({
+    frameDb: -75,
+    vadProb: 0,
+    isGateOpen: false,
+    smoothedGain: 0,
+    rnnoiseActive: false,
+  });
+  const calibrationIntervalRef = useRef<number | null>(null);
+  const calibrationTimeoutRef = useRef<number | null>(null);
   const outputDevicesRef = useRef<MediaDeviceInfo[]>([]);
   const selectedOutputIdRef = useRef<string>('');
   const appliedSinkIdRef = useRef<string>('');
@@ -120,13 +136,32 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     selectedOutputIdRef.current = selectedOutputId;
   }, [selectedOutputId]);
 
+  const syncWorkletConfig = useCallback(() => {
+    if (workletNodeRef.current) {
+      try {
+        workletNodeRef.current.port.postMessage({
+          type: 'config',
+          enabled: isEnabledRef.current,
+          thresholdDb: thresholdDbRef.current,
+          krispMode: krispModeRef.current,
+          isLoopbackTest: loopbackAudibleRef.current,
+          needPcmStream: false,
+        });
+      } catch {
+        // Ignore if port closed
+      }
+    }
+  }, []);
+
   useEffect(() => {
     isEnabledRef.current = isEnabled;
-  }, [isEnabled]);
+    syncWorkletConfig();
+  }, [isEnabled, syncWorkletConfig]);
 
   useEffect(() => {
     loopbackAudibleRef.current = loopbackAudible;
-  }, [loopbackAudible]);
+    syncWorkletConfig();
+  }, [loopbackAudible, syncWorkletConfig]);
 
   useEffect(() => {
     speakerEchoGuardRef.current = speakerEchoGuardEnabled;
@@ -144,6 +179,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
   useEffect(() => {
     krispModeRef.current = krispModeEnabled;
+    syncWorkletConfig();
     const track = micStreamRef.current?.getAudioTracks()[0];
     if (track && typeof track.applyConstraints === 'function') {
       track
@@ -162,7 +198,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         0.02
       );
     }
-  }, [krispModeEnabled]);
+  }, [krispModeEnabled, syncWorkletConfig]);
 
   useEffect(() => {
     vocalClarityRef.current = vocalClarityEnabled;
@@ -184,7 +220,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
   useEffect(() => {
     thresholdDbRef.current = thresholdDb;
-  }, [thresholdDb]);
+    syncWorkletConfig();
+  }, [thresholdDb, syncWorkletConfig]);
 
   useEffect(() => {
     isMicRunningRef.current = isMicRunning;
@@ -430,8 +467,22 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     }
   }, [refreshAudioDevices]);
 
+  const clearCalibrationTimers = useCallback(() => {
+    if (calibrationIntervalRef.current !== null) {
+      window.clearInterval(calibrationIntervalRef.current);
+      calibrationIntervalRef.current = null;
+    }
+    if (calibrationTimeoutRef.current !== null) {
+      window.clearTimeout(calibrationTimeoutRef.current);
+      calibrationTimeoutRef.current = null;
+    }
+  }, []);
+
   const stopLiveMacMicrophone = useCallback(async () => {
     micSessionIdRef.current += 1;
+    clearCalibrationTimers();
+    setIsCalibrating(false);
+    setCalibrationSecLeft(0);
     setRnnoiseReady(false);
     appliedSinkIdRef.current = '';
     if (virtualSinkAudioRef.current) {
@@ -445,6 +496,16 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       earphoneAudioRef.current.volume = 0;
       earphoneAudioRef.current.pause();
       earphoneAudioRef.current.srcObject = null;
+    }
+    if (workletNodeRef.current) {
+      try {
+        workletNodeRef.current.port.postMessage({ type: 'destroy' });
+      } catch {
+        // Ignore
+      }
+      workletNodeRef.current.port.onmessage = null;
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
     }
     if (processorNodeRef.current) {
       processorNodeRef.current.onaudioprocess = null;
@@ -463,15 +524,34 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     rawAnalyserRef.current = null;
     cleanAnalyserRef.current = null;
     clarityNodesRef.current = null;
+    audioModeRef.current = 'script';
+    workletStatsRef.current = {
+      frameDb: -75,
+      vadProb: 0,
+      isGateOpen: false,
+      smoothedGain: 0,
+      rnnoiseActive: false,
+    };
     dspCoreRef.current.destroy();
     setLoopbackAudible(false);
     loopbackAudibleRef.current = false;
     setIsMicRunning(false);
-  }, []);
+  }, [clearCalibrationTimers]);
 
   useEffect(() => {
     return () => {
       micSessionIdRef.current += 1;
+      clearCalibrationTimers();
+      if (workletNodeRef.current) {
+        try {
+          workletNodeRef.current.port.postMessage({ type: 'destroy' });
+        } catch {
+          // Ignore
+        }
+        workletNodeRef.current.port.onmessage = null;
+        workletNodeRef.current.disconnect();
+        workletNodeRef.current = null;
+      }
       dspCoreRef.current.destroy();
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -480,14 +560,24 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         audioCtxRef.current.close().catch(() => {});
       }
     };
-  }, []);
+  }, [clearCalibrationTimers]);
 
   const startLiveMacMicrophone = useCallback(
-    async (customInputId?: string) => {
+    async (customInputId?: string): Promise<boolean> => {
       const sessionId = ++micSessionIdRef.current;
       setMicError(null);
       setRnnoiseReady(false);
       try {
+        if (workletNodeRef.current) {
+          try {
+            workletNodeRef.current.port.postMessage({ type: 'destroy' });
+          } catch {
+            // Ignore
+          }
+          workletNodeRef.current.port.onmessage = null;
+          workletNodeRef.current.disconnect();
+          workletNodeRef.current = null;
+        }
         if (processorNodeRef.current) {
           processorNodeRef.current.onaudioprocess = null;
           processorNodeRef.current.disconnect();
@@ -660,47 +750,115 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           makeupGainNode,
         };
 
-        const processorNode = ctx.createScriptProcessor(512, 1, 1);
-        processorNodeRef.current = processorNode;
-        const dspCore = new NearFieldHybridDspCore();
-        dspCoreRef.current = dspCore;
+        let processingNode: AudioNode | null = null;
 
-        // Inisialisasi real RNNoise 0.2 WASM asynchronously tanpa memblokir aliran audio;
-        // jika sesi mic dihentikan sebelum siap, instance langsung di-destroy agar bebas memory leak.
-        createRnnoiseWasmProcessor()
-          .then((engine) => {
-            if (micSessionIdRef.current !== sessionId || dspCoreRef.current !== dspCore) {
-              engine.destroy();
-              return;
+        // Prioritaskan AudioWorkletNode (128-sample real-time audio thread) agar bebas stutter UI
+        if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+          try {
+            const [{ RNNOISE_SYNC_INLINE_SCRIPT }, { buildOpungWorkletModuleCode }] =
+              await Promise.all([
+                import('../utils/rnnoiseSyncInline'),
+                import('../utils/opungWorkletBuilder'),
+              ]);
+            if (micSessionIdRef.current !== sessionId) {
+              return false;
             }
-            dspCore.setRnnoiseEngine(engine);
-            setRnnoiseReady(true);
-          })
-          .catch(() => {
-            // Graceful fallback ke mode Formant + Wiener DSP bila WASM gagal dimuat
-          });
+            const workletCode = buildOpungWorkletModuleCode(RNNOISE_SYNC_INLINE_SCRIPT);
+            const workletBlob = new Blob([workletCode], { type: 'application/javascript' });
+            const workletUrl = URL.createObjectURL(workletBlob);
+            try {
+              await ctx.audioWorklet.addModule(workletUrl);
+            } finally {
+              URL.revokeObjectURL(workletUrl);
+            }
+            if (micSessionIdRef.current !== sessionId) {
+              return false;
+            }
 
-        processorNode.onaudioprocess = (ev) => {
-          const inBuf = ev.inputBuffer.getChannelData(0);
-          const outBuf = ev.outputBuffer.getChannelData(0);
-          const enabled = isEnabledRef.current;
-          const thresh = thresholdDbRef.current;
-          const krispOn = krispModeRef.current;
-          const isLoopback = loopbackAudibleRef.current;
+            const workletNode = new AudioWorkletNode(ctx, 'opung-hybrid-processor', {
+              numberOfInputs: 1,
+              numberOfOutputs: 1,
+              outputChannelCount: [1],
+            });
+            workletNode.port.onmessage = (ev) => {
+              if (micSessionIdRef.current !== sessionId) return;
+              const msg = ev.data as Record<string, unknown> | null;
+              if (!msg || typeof msg !== 'object') return;
+              if (msg.type === 'ready') {
+                setRnnoiseReady(Boolean(msg.rnnoiseActive));
+              } else if (msg.type === 'stats') {
+                const stats = {
+                  frameDb: typeof msg.frameDb === 'number' ? msg.frameDb : -75,
+                  vadProb: typeof msg.vadProb === 'number' ? msg.vadProb : 0,
+                  isGateOpen: Boolean(msg.isGateOpen),
+                  smoothedGain: typeof msg.smoothedGain === 'number' ? msg.smoothedGain : 0,
+                  rnnoiseActive: Boolean(msg.rnnoiseActive),
+                };
+                workletStatsRef.current = stats;
+                const isMutedByGate =
+                  isEnabledRef.current && !stats.isGateOpen && stats.smoothedGain === 0.0;
+                hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
+              }
+            };
+            workletNode.port.postMessage({
+              type: 'config',
+              enabled: isEnabledRef.current,
+              thresholdDb: thresholdDbRef.current,
+              krispMode: krispModeRef.current,
+              isLoopbackTest: loopbackAudibleRef.current,
+              needPcmStream: false,
+            });
+            workletNodeRef.current = workletNode;
+            audioModeRef.current = 'worklet';
+            processingNode = workletNode;
+          } catch {
+            processingNode = null;
+          }
+        }
 
-          dspCore.processAudioBlock(
-            inBuf,
-            outBuf,
-            enabled,
-            thresh,
-            krispOn,
-            isLoopback
-          );
-          hardGateGain.gain.value =
-            enabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0
-              ? 0.0
-              : 1.0;
-        };
+        if (!processingNode) {
+          audioModeRef.current = 'script';
+          const processorNode = ctx.createScriptProcessor(512, 1, 1);
+          processorNodeRef.current = processorNode;
+          const dspCore = new NearFieldHybridDspCore();
+          dspCoreRef.current = dspCore;
+
+          // Fallback ScriptProcessorNode + real RNNoise 0.2 WASM async
+          import('../utils/rnnoiseEngine')
+            .then(({ createRnnoiseWasmProcessor }) => createRnnoiseWasmProcessor())
+            .then((engine) => {
+              if (micSessionIdRef.current !== sessionId || dspCoreRef.current !== dspCore) {
+                engine.destroy();
+                return;
+              }
+              dspCore.setRnnoiseEngine(engine);
+              setRnnoiseReady(true);
+            })
+            .catch(() => {});
+
+          processorNode.onaudioprocess = (ev) => {
+            const inBuf = ev.inputBuffer.getChannelData(0);
+            const outBuf = ev.outputBuffer.getChannelData(0);
+            const enabled = isEnabledRef.current;
+            const thresh = thresholdDbRef.current;
+            const krispOn = krispModeRef.current;
+            const isLoopback = loopbackAudibleRef.current;
+
+            dspCore.processAudioBlock(
+              inBuf,
+              outBuf,
+              enabled,
+              thresh,
+              krispOn,
+              isLoopback
+            );
+            hardGateGain.gain.value =
+              enabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0
+                ? 0.0
+                : 1.0;
+          };
+          processingNode = processorNode;
+        }
 
         const cleanDest = ctx.createMediaStreamDestination();
         try {
@@ -723,14 +881,14 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
         cleanStreamRef.current = cleanDest.stream;
 
-        // KEEP-ALIVE NODE (Gain = 0.0): Menjamin Chrome/WebKit selalu memproses onaudioprocess
+        // KEEP-ALIVE NODE (Gain = 0.0): Menjamin Chrome/WebKit selalu memproses node audio
         // tanpa mengeluarkan suara apa pun ke speaker/earphone (0.0 mutlak).
         const keepAliveGain = ctx.createGain();
         keepAliveGain.gain.value = 0.0;
 
         sourceNode.connect(rawAnalyser);
-        rawAnalyser.connect(processorNode);
-        processorNode.connect(subCutNode);
+        rawAnalyser.connect(processingNode);
+        processingNode.connect(subCutNode);
         subCutNode.connect(krispLowPassNode);
         krispLowPassNode.connect(mudCutNode);
         mudCutNode.connect(warmthNode);
@@ -816,12 +974,14 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         }
 
         setIsMicRunning(true);
+        return true;
       } catch (err) {
         setMicError(
           err instanceof Error
             ? err.message
             : 'Klik Izinkan Mikrofon pada browser untuk mengaktifkan aplikasi macOS ini.'
         );
+        return false;
       }
     },
     [
@@ -830,6 +990,50 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       routeEarphoneLoopbackToPhysicalDevice,
     ]
   );
+
+  const handleStartRoomCalibration = async () => {
+    clearCalibrationTimers();
+    setCalibrationNote('Menyiapkan mikrofon untuk kalibrasi 3 detik...');
+    if (!isMicRunningRef.current) {
+      const ok = await startLiveMacMicrophone();
+      if (!ok) {
+        setIsCalibrating(false);
+        setCalibrationSecLeft(0);
+        setCalibrationNote('Aktifkan izin mikrofon untuk kalibrasi ruangan.');
+        return;
+      }
+    }
+
+    setIsCalibrating(true);
+    setCalibrationSecLeft(3);
+    setCalibrationNote('Diam sejenak (3 dtk) untuk ukur bising latar...');
+    const samplesDb: number[] = [];
+    const startedAt = Date.now();
+
+    calibrationIntervalRef.current = window.setInterval(() => {
+      const currentDb =
+        audioModeRef.current === 'worklet'
+          ? workletStatsRef.current.frameDb
+          : dspCoreRef.current.lastFrameDb;
+      if (Number.isFinite(currentDb)) {
+        samplesDb.push(currentDb);
+      }
+      const elapsed = Date.now() - startedAt;
+      const secsLeft = Math.max(1, Math.ceil((CALIBRATION_DURATION_MS - elapsed) / 1000));
+      setCalibrationSecLeft(secsLeft);
+    }, 60);
+
+    calibrationTimeoutRef.current = window.setTimeout(() => {
+      clearCalibrationTimers();
+      const result = computeRecommendedThresholdDb(samplesDb);
+      setThresholdDb(result.recommendedThresholdDb);
+      setIsCalibrating(false);
+      setCalibrationSecLeft(0);
+      setCalibrationNote(
+        `Kalibrasi selesai: ${result.recommendedThresholdDb} dB (bising ${result.p90AmbientDb} dB)`
+      );
+    }, CALIBRATION_DURATION_MS);
+  };
 
   // Fungsi 1-Klik untuk Memaksa Bangunkan (Wake-Up) & Menyambungkan Ulang BlackHole 2ch
   const handleForceWakeUpBlackHole = async () => {
@@ -990,13 +1194,20 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           }
         }
 
-        const core = dspCoreRef.current;
+        const activeStats =
+          audioModeRef.current === 'worklet'
+            ? workletStatsRef.current
+            : {
+                isGateOpen: dspCoreRef.current.isGateOpen,
+                smoothedGain: dspCoreRef.current.smoothedGain,
+                frameDb: dspCoreRef.current.lastFrameDb,
+              };
         setLiveStats({
           rawPct: Math.round((rSum / (barCount * 255)) * 100),
           cleanPct: Math.round((cSum / (barCount * 255)) * 100),
-          gateOpen: core.isGateOpen,
-          gainVal: `${core.smoothedGain.toFixed(2)}x`,
-          frameDb: core.lastFrameDb,
+          gateOpen: activeStats.isGateOpen,
+          gainVal: `${activeStats.smoothedGain.toFixed(2)}x`,
+          frameDb: activeStats.frameDb,
         });
       } else {
         // Idle visual simulation before user clicks "Aktifkan Mic"
@@ -1067,30 +1278,37 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     return () => window.clearInterval(timer);
   }, []);
 
-  // Satu Pintu Unduhan: Langsung OPUNG-Installer.dmg (Tanpa .zip / .command / Terminal)
-  const handleDownloadMacDmg = () => {
-    const dmgBytes = buildMacOSDiskImageDmg();
-    const blob = new Blob([dmgBytes], {
-      type: 'application/x-apple-diskimage',
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'OPUNG-Installer.dmg';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  // Satu Pintu Unduhan: Langsung OPUNG-Installer.dmg (Lazy-loaded agar initial bundle web ringan)
+  const handleDownloadMacDmg = async () => {
+    setIsDownloadingDmg(true);
+    try {
+      const { buildMacOSDiskImageDmg } = await import('../utils/macosAppBuilder');
+      const dmgBytes = buildMacOSDiskImageDmg();
+      const blob = new Blob([dmgBytes], {
+        type: 'application/x-apple-diskimage',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'OPUNG-Installer.dmg';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
-    setDownloadBanner({
-      title: 'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, geser OPUNG.app ke folder Applications, lalu buka aplikasinya.',
-      detail: 'Saat pertama kali membuka aplikasi Opung di Applications, cukup Klik Kanan (2 jari) → pilih Open.',
-    });
+      setDownloadBanner({
+        title: 'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, geser OPUNG.app ke folder Applications, lalu buka aplikasinya.',
+        detail: 'Saat pertama kali membuka aplikasi Opung di Applications, cukup Klik Kanan (2 jari) → pilih Open.',
+      });
+    } finally {
+      setIsDownloadingDmg(false);
+    }
   };
 
   const handleDownloadWindowsApp = async () => {
     setIsDownloadingWin(true);
     try {
+      const { downloadWindowsOpungApp } = await import('../utils/windowsAppBuilder');
       const res = await downloadWindowsOpungApp();
       if (res.mode === 'exe') {
         setDownloadBanner({
@@ -1149,10 +1367,11 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           <button
             type="button"
             onClick={handleDownloadMacDmg}
+            disabled={isDownloadingDmg}
             className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold bg-sky-400 hover:bg-sky-300 text-slate-950 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
             <Download className="w-4 h-4 shrink-0" />
-            Unduh Opung (.dmg)
+            {isDownloadingDmg ? 'Menyiapkan .dmg...' : 'Unduh Opung (.dmg)'}
           </button>
 
           <button
@@ -1396,15 +1615,29 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                 </div>
               </div>
 
-              {/* 3. Radius Fokus Suara (3-Segment Control) */}
+              {/* 3. Radius Fokus Suara (3-Segment Control + Kalibrasi 3d) */}
               <div className="bg-[#111726] border border-slate-800/90 rounded-xl p-3.5 space-y-2.5">
-                <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center justify-between gap-2 text-[11px]">
                   <span className="font-medium text-slate-200">
                     Radius Fokus Suara
                   </span>
-                  <span className="font-mono text-sky-400 tabular-nums text-[10px]">
-                    {distanceText} ({thresholdDb} dB)
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleStartRoomCalibration}
+                      disabled={isCalibrating}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                        isCalibrating
+                          ? 'bg-amber-500/20 border-amber-400/50 text-amber-300'
+                          : 'bg-sky-500/10 hover:bg-sky-500/20 border-sky-400/40 text-sky-300'
+                      }`}
+                    >
+                      {isCalibrating ? `Mengukur ${calibrationSecLeft}s...` : 'Kalibrasi 3d'}
+                    </button>
+                    <span className="font-mono text-sky-400 tabular-nums text-[10px]">
+                      {distanceText} ({thresholdDb} dB)
+                    </span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-1.5 bg-[#090D15] p-1 rounded-lg border border-slate-800/80">
@@ -1457,6 +1690,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
                   />
                   <span>0.5m</span>
                 </div>
+
+                {calibrationNote && (
+                  <div className="text-[10px] font-mono text-emerald-300/95 bg-emerald-950/25 border border-emerald-500/30 rounded-md px-2 py-1">
+                    {calibrationNote}
+                  </div>
+                )}
               </div>
 
               {/* 4. Real-Time Voice & Noise Monitor */}

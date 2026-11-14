@@ -26,11 +26,11 @@ Berbeda dengan peredam bising bawaan laptop yang masih sering meloloskan suara r
 
 | Fitur | Kemampuan Teknis | Manfaat Saat Rapat |
 | :--- | :--- | :--- |
-| **Gerbang Radius &le; 1.0 Meter** | *Hard Proximity Gate* dengan 3 preset jarak (`0.5m Dekat`, `1.0m Kantor`, `1.5m Ruang`) | Suara obrolan rekan kerja di meja sebelah (&ge; 1.5m) diputus mutlak ke `0.00x` (`-90 dB`) |
-| **Pengupas Bising Saat Bicara** | *Hybrid Real RNNoise 0.2 WASM* (Xiph.org Neural GRU) + *ZCR Discriminator* | Suara bor bangunan, deru kipas, dan ketikan *mechanical keyboard* dikupas bersih bahkan saat Anda sedang berbicara |
+| **Gerbang Radius &le; 1.0 Meter** | *Hard Proximity Gate* (`0.5m`, `1.0m`, `1.5m`) + **Kalibrasi 3 Detik** otomatis (`p90 + 6 dB`) | Suara obrolan rekan kerja di meja sebelah (&ge; 1.5m) diputus mutlak ke `0.00x` (`-90 dB`) menyesuaikan akustik ruangan |
+| **Mesin AudioWorklet + RNNoise 0.2** | *Dedicated Real-Time AudioWorklet Thread* (`AudioWorkletNode`) + *Real RNNoise 0.2 WASM* + *ZCR Discriminator* (dengan *fallback* otomatis) | Suara bor, deru kipas, dan *mechanical keyboard* dikupas bersih tanpa *stutter* UI |
 | **Penjernih Vokal Studio HD** | *5-Stage Parametric EQ* (`48 kHz`) + *Soft-Knee Studio Compressor* | Menghilangkan suara mendem/kaleng (*Anti-Mud 260 Hz*) dan mengangkat artikulasi vokal (`+4.5 dB @ 3.5 kHz`) |
 | **Anti-Bocor Speaker & Anti-Goa** | *Hardware AEC* + *Echo Guard Decay Tracker* | Mencegah suara dari speaker MacBook atau laptop Windows memantul kembali ke mikrofon saat rapat tanpa *earphone* |
-| **Native macOS (Menu Bar)** | Objective-C (`Cocoa` + `NSStatusBar` + `WKWebView` + `CoreAudio HAL`) &rarr; `BlackHole 2ch` | Muncul di Menu Bar atas macOS, offline WebAssembly, beban CPU `< 2%` |
+| **Native macOS (Menu Bar)** | Objective-C (`Cocoa` + `NSStatusBar` + `WKWebView` + `CoreAudio HAL`) Universal `arm64 + x86_64` &rarr; `BlackHole 2ch` | Muncul di Menu Bar atas macOS, offline WebAssembly, beban CPU `< 2%` |
 | **Native Windows (System Tray)** | `.NET 8 WinForms` + `Edge WebView2` + `NAudio WASAPI` &rarr; `VB-CABLE` | Berjalan di System Tray Windows 10/11 dalam satu file `Opung-Windows-x64.exe` |
 
 ---
@@ -118,8 +118,9 @@ npm install
 # 2. Jalankan server pengembangan web (http://localhost:3000)
 npm run dev
 
-# 3. Cek tipe TypeScript & build produksi web
+# 3. Cek tipe TypeScript, jalankan unit & golden WAV tests, serta build produksi web
 npm run lint
+npm test
 npm run build
 
 # 4. Cetak installer macOS (OPUNG-Installer.dmg)
@@ -136,12 +137,13 @@ dotnet publish windows/Opung.csproj -c Release -r win-x64 --self-contained true 
 
 ```text
 ├── .github/workflows/
-│   └── release.yml                      # CI/CD build otomatis .dmg (macOS) & .exe (Windows) ke GitHub Releases
+│   └── release.yml                      # CI/CD lint/test gate + build Universal .dmg (macOS) & .exe (Windows)
 ├── public/
 │   ├── opung-icon.png                   # Ikon resmi aplikasi Opung
 │   └── demo-*.mp3                       # Audio demo Bahasa Indonesia asli
 ├── scripts/
 │   ├── build-dmg.mjs                    # Generator OPUNG-Installer.dmg lewat CLI
+│   ├── export-macos-app.mjs             # Ekspor OPUNG.app staging tree untuk kompilasi Universal di CI macOS
 │   ├── generate-rnnoise-bundle.mjs      # Pembungkus offline @jitsi/rnnoise-wasm (RNNoise 0.2)
 │   └── prepare-windows-assets.mjs       # Sinkronisasi index.html & AppIcon.ico ke project Windows
 ├── windows/
@@ -151,15 +153,18 @@ dotnet publish windows/Opung.csproj -c Release -r win-x64 --self-contained true 
 │   └── Resources/                       # Aset tersemat (AppIcon.ico & index.html)
 ├── src/
 │   ├── components/
-│   │   └── MacOSDesktopAppWorkspace.tsx # Mesin Hybrid RNNoise WASM + jendela kontrol Opung
+│   │   └── MacOSDesktopAppWorkspace.tsx # AudioWorklet + Kalibrasi 3 Detik + jendela kontrol Opung
 │   ├── utils/
 │   │   ├── audioDeviceFilters.ts        # Klasifikasi perangkat virtual mic (BlackHole 2ch & VB-CABLE)
+│   │   ├── demoDspProcessor.ts          # Pemroses demo real-time Hybrid RNNoise 0.2 WASM di halaman uji banding
 │   │   ├── hybridDspCore.ts             # Pure Hybrid DSP Core (RNNoise 0.2 + Proximity Gate)
 │   │   ├── macosAppBuilder.ts           # Generator Native macOS Cocoa/HAL & HFS+ .DMG Builder
+│   │   ├── opungWorkletBuilder.ts       # AudioWorkletProcessor Opung ("opung-hybrid-processor")
 │   │   ├── rnnoiseEngine.ts             # Wrapper WASM @jitsi/rnnoise-wasm (lifecycle aman)
 │   │   ├── rnnoiseSyncInline.ts         # Bundle offline RNNoise 0.2 WASM untuk desktop app
-│   │   └── windowsAppBuilder.ts         # Generator .ICO & Windows Launcher .ZIP fallback
-│   ├── App.tsx                          # Halaman utama, pemutar uji banding & panduan macOS/Windows
+│   │   ├── roomCalibration.ts           # Mesin perhitungan kalibrasi bising ruangan 3 detik (p90 + 6 dB)
+│   │   └── windowsAppBuilder.ts         # Generator .ICO, resolver VITE_WINDOWS_EXE_URL & ZIP fallback
+│   ├── App.tsx                          # Halaman utama (lazy download chunk + pemutar uji banding Hybrid DSP)
 │   ├── main.tsx                         # Entry point aplikasi React
 │   └── index.css                        # Konfigurasi tema gelap & tipografi Tailwind CSS
 ├── LICENSE                              # MIT License (Copyright (c) 2026 Muhammad Zen)

@@ -15,8 +15,8 @@ permissions:
   contents: write
 
 jobs:
-  build-macos:
-    name: Build OPUNG-Installer.dmg (macOS)
+  run-tests:
+    name: Lint, Unit Tests & Web Build
     runs-on: ubuntu-latest
 
     steps:
@@ -32,13 +32,48 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify TypeScript & Build Web App
+      - name: Run TypeScript Check, Unit & Golden Audio Tests, and Web Build
         run: |
           npm run lint
+          npm test
           npm run build
 
-      - name: Build OPUNG-Installer.dmg
-        run: npx tsx scripts/build-dmg.mjs
+  build-macos:
+    name: Build Universal OPUNG-Installer.dmg (macOS)
+    needs: [run-tests]
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Export OPUNG.app Bundle & Finder Staging
+        run: node --import tsx scripts/export-macos-app.mjs dmg_stage
+
+      - name: Compile Universal Objective-C Host (arm64 + x86_64) & Ad-hoc Sign
+        run: |
+          clang -O2 -fobjc-arc -arch arm64 -arch x86_64 \
+            -mmacosx-version-min=11.0 \
+            -framework Cocoa -framework WebKit -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
+            dmg_stage/OPUNG.app/Contents/Resources/app/native_host.m \
+            -o dmg_stage/OPUNG.app/Contents/MacOS/RNNoiseStudioNativeV17
+          chmod +x dmg_stage/OPUNG.app/Contents/MacOS/RNNoiseStudioNativeV17
+          ln -s /Applications dmg_stage/Applications
+          codesign --force --deep --entitlements opung-entitlements.plist --sign - dmg_stage/OPUNG.app
+          rm -f opung-entitlements.plist
+
+      - name: Create Compressed UDZO OPUNG-Installer.dmg
+        run: |
+          hdiutil create -volname "OPUNG Installer" -srcfolder dmg_stage -ov -format UDZO OPUNG-Installer.dmg
 
       - name: Upload macOS DMG artifact
         uses: actions/upload-artifact@v4
@@ -48,6 +83,7 @@ jobs:
 
   build-windows:
     name: Build Opung-Windows-x64.exe (Windows)
+    needs: [run-tests]
     runs-on: windows-latest
 
     steps:
@@ -106,12 +142,12 @@ jobs:
           body: |
             ## Opung — Office Proximity Ultra Noise Gate (${{ inputs.tag || github.ref_name }})
 
-            Aplikasi peredam bising jarak dekat (**radius ≤ 1.0 meter**) dan penjernih vokal **48 kHz Studio HD** untuk **macOS** & **Windows** (Google Meet, Zoom, Microsoft Teams).
+            Aplikasi peredam bising jarak dekat (**radius ≤ 1.0 meter**), pre-compiled **Universal macOS (Apple Silicon & Intel)** + **AudioWorklet RNNoise 0.2 WASM**, dan penjernih vokal **48 kHz Studio HD** untuk **macOS** & **Windows** (Google Meet, Zoom, Microsoft Teams).
 
             ### Cara Pasang di macOS
             1. Unduh **`OPUNG-Installer.dmg`** di bagian **Assets** di bawah.
-            2. Klik 2x file `OPUNG-Installer.dmg`, lalu **geser `Opung.app` ke folder `Applications`**.
-            3. Buka folder **Applications**, lalu **Klik Kanan (2 jari) → Open** pada `Opung.app`.
+            2. Klik 2x file `OPUNG-Installer.dmg`, lalu **geser `OPUNG.app` ke folder `Applications`**.
+            3. Buka folder **Applications**, lalu **Klik Kanan (2 jari) → Open** pada `OPUNG.app`.
             4. Pilih **`BlackHole 2ch`** sebagai mikrofon di Google Meet / Zoom.
 
             ### Cara Pasang di Windows 10 / 11
