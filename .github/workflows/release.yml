@@ -29,7 +29,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Run TypeScript Check, Unit & Golden Audio Tests, and Web Build
         run: |
@@ -52,7 +52,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Export OPUNG.app Bundle & Finder Staging
         run: npx tsx scripts/export-macos-app.mjs dmg_stage
@@ -99,7 +99,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Prepare Windows Resources (index.html & AppIcon.ico)
         run: npx tsx scripts/prepare-windows-assets.mjs
