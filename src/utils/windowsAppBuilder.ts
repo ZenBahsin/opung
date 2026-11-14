@@ -145,81 +145,10 @@ export function buildWindowsLauncherZip(): ArrayBuffer {
   ]);
 }
 
-export function getWindowsExeDownloadCandidates(): string[] {
-  const meta =
-    typeof import.meta !== 'undefined'
-      ? (import.meta as unknown as { env?: Record<string, string | undefined> })
-      : undefined;
-  const configuredUrl = meta?.env?.VITE_WINDOWS_EXE_URL?.trim();
-  const candidates: string[] = [];
-  if (configuredUrl) {
-    candidates.push(configuredUrl);
-  }
-  candidates.push('/Opung-Windows-x64.exe');
-  return candidates;
-}
+export {
+  getWindowsExeDownloadCandidates,
+  isExternalHttpUrl,
+  downloadWindowsOpungApp,
+  type WindowsDownloadResult,
+} from './windowsDownload';
 
-export interface WindowsDownloadResult {
-  mode: 'exe' | 'launcher-zip';
-  filename: string;
-}
-
-export function isExternalHttpUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url.trim());
-}
-
-function triggerDirectUrlDownload(url: string, filename: string): void {
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.rel = 'noopener noreferrer';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-export async function downloadWindowsOpungApp(): Promise<WindowsDownloadResult> {
-  const candidates = getWindowsExeDownloadCandidates();
-
-  for (const url of candidates) {
-    // URL eksternal (mis. GitHub Releases) memblokir preflight CORS HEAD -> unduh langsung
-    if (isExternalHttpUrl(url)) {
-      triggerDirectUrlDownload(url, 'Opung-Windows-x64.exe');
-      return {
-        mode: 'exe',
-        filename: 'Opung-Windows-x64.exe',
-      };
-    }
-
-    try {
-      const response = await fetch(url, { method: 'HEAD' });
-      const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      // Pastikan respons bukan halaman SPA HTML fallback dari Vite dev server
-      if (response.ok && !contentType.includes('text/html')) {
-        triggerDirectUrlDownload(url, 'Opung-Windows-x64.exe');
-        return {
-          mode: 'exe',
-          filename: 'Opung-Windows-x64.exe',
-        };
-      }
-    } catch {
-      // Lanjut cek kandidat berikutnya atau jatuh ke launcher zip
-    }
-  }
-
-  const zipBytes = buildWindowsLauncherZip();
-  const blob = new Blob([zipBytes], { type: 'application/zip' });
-  const blobUrl = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = blobUrl;
-  link.download = 'Opung-Windows-Launcher.zip';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(blobUrl);
-
-  return {
-    mode: 'launcher-zip',
-    filename: 'Opung-Windows-Launcher.zip',
-  };
-}

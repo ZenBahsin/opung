@@ -17,7 +17,9 @@ import {
   ShieldCheck,
   Sparkles,
   CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
+import { formatDownloadErrorMessage, importWithRetry } from './utils/dynamicImport';
 
 type DemoScenarioId = 'office-chatter' | 'drill-keyboard' | 'speaker-echo';
 
@@ -78,6 +80,7 @@ export default function App() {
   const [winDownloadedNotice, setWinDownloadedNotice] = useState<
     'exe' | 'launcher-zip' | null
   >(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [installOsTab, setInstallOsTab] = useState<'macos' | 'windows'>('macos');
 
   // Interactive "Hear the Difference" (Krisp-style) Demo Player State
@@ -208,7 +211,7 @@ export default function App() {
       };
 
       const [{ resampleLinearTo48k, renderHybridDemoComparison, DEMO_DSP_SAMPLE_RATE }] =
-        await Promise.all([import('./utils/demoDspProcessor')]);
+        await Promise.all([importWithRetry(() => import('./utils/demoDspProcessor'))]);
 
       const voiceBuffer =
         (await loadAudioBuffer(ctx, voiceUrlMap[scenarioId])) ||
@@ -391,8 +394,11 @@ export default function App() {
   // Satu Pintu Unduhan: Langsung OPUNG-Installer.dmg (Lazy-loaded agar landing page super cepat)
   const handleDownloadMacOSApp = async () => {
     setIsDownloadingDmg(true);
+    setDownloadError(null);
     try {
-      const { buildMacOSDiskImageDmg } = await import('./utils/macosAppBuilder');
+      const { buildMacOSDiskImageDmg } = await importWithRetry(
+        () => import('./utils/macosAppBuilder')
+      );
       const dmgBuffer = buildMacOSDiskImageDmg();
       const blob = new Blob([dmgBuffer], {
         type: 'application/x-apple-diskimage',
@@ -406,6 +412,8 @@ export default function App() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       setDmgDownloadedNotice(true);
+    } catch (err) {
+      setDownloadError(formatDownloadErrorMessage(err));
     } finally {
       setIsDownloadingDmg(false);
     }
@@ -413,10 +421,15 @@ export default function App() {
 
   const handleDownloadWindowsApp = async () => {
     setIsDownloadingWin(true);
+    setDownloadError(null);
     try {
-      const { downloadWindowsOpungApp } = await import('./utils/windowsAppBuilder');
+      const { downloadWindowsOpungApp } = await importWithRetry(
+        () => import('./utils/windowsDownload')
+      );
       const result = await downloadWindowsOpungApp();
       setWinDownloadedNotice(result.mode);
+    } catch (err) {
+      setDownloadError(formatDownloadErrorMessage(err));
     } finally {
       setIsDownloadingWin(false);
     }
@@ -593,6 +606,13 @@ export default function App() {
                       <strong>Opung-Windows-x64.exe</strong> tunggal, tersedia otomatis di{' '}
                       <strong>GitHub Releases</strong>.
                     </span>
+                  </div>
+                )}
+
+                {downloadError && (
+                  <div className="mt-4 p-3.5 rounded-xl border border-rose-500/40 bg-rose-950/30 text-xs text-rose-200 flex items-center gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{downloadError}</span>
                   </div>
                 )}
               </div>

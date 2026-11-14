@@ -26,6 +26,7 @@ import {
   CALIBRATION_DURATION_MS,
   computeRecommendedThresholdDb,
 } from '../utils/roomCalibration';
+import { formatDownloadErrorMessage, importWithRetry } from '../utils/dynamicImport';
 
 export const MacOSDesktopAppWorkspace: React.FC = () => {
   // Real-Time macOS App State
@@ -47,6 +48,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   const [downloadBanner, setDownloadBanner] = useState<{
     title: string;
     detail: string;
+    isError?: boolean;
   } | null>(null);
   const [isDownloadingWin, setIsDownloadingWin] = useState<boolean>(false);
   const [isDownloadingDmg, setIsDownloadingDmg] = useState<boolean>(false);
@@ -757,8 +759,8 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           try {
             const [{ RNNOISE_SYNC_INLINE_SCRIPT }, { buildOpungWorkletModuleCode }] =
               await Promise.all([
-                import('../utils/rnnoiseSyncInline'),
-                import('../utils/opungWorkletBuilder'),
+                importWithRetry(() => import('../utils/rnnoiseSyncInline')),
+                importWithRetry(() => import('../utils/opungWorkletBuilder')),
               ]);
             if (micSessionIdRef.current !== sessionId) {
               return false;
@@ -824,7 +826,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           dspCoreRef.current = dspCore;
 
           // Fallback ScriptProcessorNode + real RNNoise 0.2 WASM async
-          import('../utils/rnnoiseEngine')
+          importWithRetry(() => import('../utils/rnnoiseEngine'))
             .then(({ createRnnoiseWasmProcessor }) => createRnnoiseWasmProcessor())
             .then((engine) => {
               if (micSessionIdRef.current !== sessionId || dspCoreRef.current !== dspCore) {
@@ -1282,7 +1284,9 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   const handleDownloadMacDmg = async () => {
     setIsDownloadingDmg(true);
     try {
-      const { buildMacOSDiskImageDmg } = await import('../utils/macosAppBuilder');
+      const { buildMacOSDiskImageDmg } = await importWithRetry(
+        () => import('../utils/macosAppBuilder')
+      );
       const dmgBytes = buildMacOSDiskImageDmg();
       const blob = new Blob([dmgBytes], {
         type: 'application/x-apple-diskimage',
@@ -1300,6 +1304,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
         title: 'OPUNG-Installer.dmg berhasil diunduh! Cukup klik 2x file OPUNG-Installer.dmg di folder Downloads Mac Anda, geser OPUNG.app ke folder Applications, lalu buka aplikasinya.',
         detail: 'Saat pertama kali membuka aplikasi Opung di Applications, cukup Klik Kanan (2 jari) → pilih Open.',
       });
+    } catch (err) {
+      setDownloadBanner({
+        title: 'Gagal mengunduh OPUNG-Installer.dmg',
+        detail: formatDownloadErrorMessage(err),
+        isError: true,
+      });
     } finally {
       setIsDownloadingDmg(false);
     }
@@ -1308,7 +1318,9 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
   const handleDownloadWindowsApp = async () => {
     setIsDownloadingWin(true);
     try {
-      const { downloadWindowsOpungApp } = await import('../utils/windowsAppBuilder');
+      const { downloadWindowsOpungApp } = await importWithRetry(
+        () => import('../utils/windowsDownload')
+      );
       const res = await downloadWindowsOpungApp();
       if (res.mode === 'exe') {
         setDownloadBanner({
@@ -1321,6 +1333,12 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
           detail: 'Ekstrak ZIP ini, lalu klik 2x Opung-Windows.bat (memakai Edge App-mode ringan). Untuk single-file .exe native, unduh Opung-Windows-x64.exe di halaman GitHub Releases.',
         });
       }
+    } catch (err) {
+      setDownloadBanner({
+        title: 'Gagal mengunduh paket Windows',
+        detail: formatDownloadErrorMessage(err),
+        isError: true,
+      });
     } finally {
       setIsDownloadingWin(false);
     }
@@ -1405,10 +1423,26 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
       </div>
 
       {downloadBanner && (
-        <div className="mt-5 p-4 rounded-xl border border-emerald-500/40 bg-emerald-950/20 text-xs text-emerald-200 flex items-start gap-3">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+        <div
+          className={`mt-5 p-4 rounded-xl border text-xs flex items-start gap-3 ${
+            downloadBanner.isError
+              ? 'border-rose-500/40 bg-rose-950/25 text-rose-200'
+              : 'border-emerald-500/40 bg-emerald-950/20 text-emerald-200'
+          }`}
+        >
+          <CheckCircle2
+            className={`w-4 h-4 shrink-0 mt-0.5 ${
+              downloadBanner.isError ? 'text-rose-400' : 'text-emerald-400'
+            }`}
+          />
           <div className="space-y-1">
-            <div className="font-semibold text-emerald-300">{downloadBanner.title}</div>
+            <div
+              className={`font-semibold ${
+                downloadBanner.isError ? 'text-rose-300' : 'text-emerald-300'
+              }`}
+            >
+              {downloadBanner.title}
+            </div>
             <div className="text-slate-300">{downloadBanner.detail}</div>
           </div>
         </div>
