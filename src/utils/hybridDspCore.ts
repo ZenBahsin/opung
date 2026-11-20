@@ -277,6 +277,13 @@ export class NearFieldHybridDspCore {
     if (!enabled) {
       this.wasEnabled = false;
       outputBuffer.set(inputBuffer);
+      let sumSq = 0;
+      for (let i = 0; i < inputBuffer.length; i++) {
+        const s = Number.isFinite(inputBuffer[i]) ? inputBuffer[i] : 0;
+        sumSq += s * s;
+      }
+      const rms = inputBuffer.length > 0 ? Math.sqrt(sumSq / inputBuffer.length) : 0;
+      this.lastFrameDb = Math.round(20.0 * Math.log10(Math.max(1e-4, rms)));
       this.isGateOpen = true;
       this.smoothedGain = 1.0;
       return;

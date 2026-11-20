@@ -63,8 +63,9 @@ jobs:
             -mmacosx-version-min=11.0 \
             -framework Cocoa -framework WebKit -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
             dmg_stage/OPUNG.app/Contents/Resources/app/native_host.m \
-            -o dmg_stage/OPUNG.app/Contents/MacOS/RNNoiseStudioNativeV17
-          chmod +x dmg_stage/OPUNG.app/Contents/MacOS/RNNoiseStudioNativeV17
+            -o dmg_stage/OPUNG.app/Contents/MacOS/OPUNG
+          cp -f dmg_stage/OPUNG.app/Contents/MacOS/OPUNG dmg_stage/OPUNG.app/Contents/MacOS/RNNoiseStudio
+          chmod +x dmg_stage/OPUNG.app/Contents/MacOS/OPUNG dmg_stage/OPUNG.app/Contents/MacOS/RNNoiseStudio
           ln -s /Applications dmg_stage/Applications
           codesign --force --deep --entitlements opung-entitlements.plist --sign - dmg_stage/OPUNG.app
           rm -f opung-entitlements.plist

@@ -1,6 +1,9 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  WINDOWS_LAUNCHER_BAT,
   buildOpungIcoBytes,
   buildWindowsLauncherZip,
   getWindowsExeDownloadCandidates,
@@ -79,9 +82,38 @@ test('cross-platform audio device filters classify macOS BlackHole and Windows V
   assert.equal(formatConnectedVirtualMicBadge('BlackHole 2ch', false), 'Terhubung ke BlackHole 2ch ✓');
 });
 
-test('MACOS_STANDALONE_APP_HTML supports both WebKit (macOS) and WebView2 (Windows) bridges', () => {
+test('MACOS_STANDALONE_APP_HTML supports both WebKit (macOS) and WebView2 (Windows) bridges with post-EQ PCM tap', () => {
   assert.match(MACOS_STANDALONE_APP_HTML, /window\.webkit\.messageHandlers\.opungAudioBridge/);
   assert.match(MACOS_STANDALONE_APP_HTML, /window\.chrome\.webview/);
   assert.match(MACOS_STANDALONE_APP_HTML, /native-virtual-cable/);
   assert.match(MACOS_STANDALONE_APP_HTML, /Terhubung ke VB-CABLE/);
+  assert.match(MACOS_STANDALONE_APP_HTML, /opung-pcm-tap/);
+  assert.match(MACOS_STANDALONE_APP_HTML, /window\.__onOpungNativeSinkStatus/);
+  assert.match(MACOS_STANDALONE_APP_HTML, /VBCABLE_ERROR/);
+  assert.match(MACOS_STANDALONE_APP_HTML, /BLACKHOLE_MISSING/);
+});
+
+test('Windows MainForm.cs adapts WASAPI MixFormat sample-rate/channels, scales DPI, and prevents double-dispose', () => {
+  const mainFormPath = path.resolve(process.cwd(), 'windows/MainForm.cs');
+  const cs = fs.readFileSync(mainFormPath, 'utf8');
+
+  // Adaptive WASAPI Shared Mode resampling (handles 44.1kHz, 48kHz, 96kHz & multi-channel VB-CABLE)
+  assert.match(cs, /using NAudio\.Wave\.SampleProviders;/);
+  assert.match(cs, /selectedDevice\.AudioClient\.MixFormat/);
+  assert.match(cs, /WdlResamplingSampleProvider/);
+  assert.match(cs, /MonoToStereoSampleProvider/);
+  assert.match(cs, /MultiplexingSampleProvider/);
+
+  // DPI-aware ClientSize so 125%/150% laptops never clip the footer
+  assert.match(cs, /DeviceDpi/);
+  assert.match(cs, /DpiChanged/);
+
+  // Distinct VBCABLE_ERROR vs VBCABLE_MISSING + safe one-time cleanup
+  assert.match(cs, /VBCABLE_ERROR/);
+  assert.match(cs, /CleanupResourcesOnce/);
+  assert.match(cs, /_activeVbCableDevice/);
+
+  // Batch launcher checks per-user Chrome install and uses taller 406x645 window
+  assert.match(WINDOWS_LAUNCHER_BAT, /%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome\.exe/);
+  assert.match(WINDOWS_LAUNCHER_BAT, /--window-size=406,645/);
 });

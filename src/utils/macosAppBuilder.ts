@@ -33,7 +33,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       background: #090d16;
       color: #f8fafc;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     body {
       padding: 12px 15px 9px 15px;
@@ -691,6 +692,13 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         if (!enabled) {
           this.wasEnabled = false;
           outputBuffer.set(inputBuffer);
+          let sumSq = 0;
+          for (let i = 0; i < inputBuffer.length; i++) {
+            const s = Number.isFinite(inputBuffer[i]) ? inputBuffer[i] : 0;
+            sumSq += s * s;
+          }
+          const rms = inputBuffer.length > 0 ? Math.sqrt(sumSq / inputBuffer.length) : 0;
+          this.lastFrameDb = Math.round(20.0 * Math.log10(Math.max(1e-4, rms)));
           this.isGateOpen = true;
           this.smoothedGain = 1.0;
           return;
@@ -746,6 +754,8 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let rawAnalyser = null;
     let cleanAnalyser = null;
     let activeMakeupGainNode = null;
+    let activeLowPassNode = null;
+    let activeHardGateGain = null;
     let dspCore = new NearFieldRNNoiseDspCore();
     let audioPipelineSessionId = 0;
     let currentMicStream = null;
@@ -753,7 +763,10 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let selectedVirtualSinkId = '';
     let nativeCoreAudioSinkActive = false;
     let activeWorkletNode = null;
+    let activePcmTapNode = null;
     let activeAudioEngineMode = 'script';
+    let micTransientRetryCount = 0;
+    let micNeedsManualRetry = false;
     const workletStats = {
       frameDb: -75,
       vadProb: 0,
@@ -765,6 +778,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     let calibrationTimeout = null;
 
     function syncStandaloneWorkletConfig() {
+      const shouldStreamNativePcm = nativeCoreAudioSinkActive && hasNativeCoreAudioBridge();
       if (activeWorkletNode && activeWorkletNode.port) {
         try {
           activeWorkletNode.port.postMessage({
@@ -773,10 +787,28 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
             thresholdDb,
             krispMode: true,
             isLoopbackTest: loopbackAudible,
-            needPcmStream: nativeCoreAudioSinkActive && hasNativeCoreAudioBridge(),
+            needPcmStream: !activePcmTapNode && shouldStreamNativePcm,
           });
         } catch (_e) {}
       }
+      if (activePcmTapNode && activePcmTapNode.port) {
+        try {
+          activePcmTapNode.port.postMessage({
+            type: 'config',
+            streaming: shouldStreamNativePcm,
+          });
+        } catch (_e) {}
+      }
+    }
+
+    function sendInt16BufferToNativeBridge(arrayBuffer) {
+      if (!nativeCoreAudioSinkActive || !hasNativeCoreAudioBridge() || !arrayBuffer) return;
+      const bytes = new Uint8Array(arrayBuffer);
+      let bin = '';
+      for (let j = 0; j < bytes.length; j++) {
+        bin += String.fromCharCode(bytes[j]);
+      }
+      sendNativeBridgeCommand(btoa(bin));
     }
 
     const isWindowsPlatform = /windows|win32|win64/i.test(navigator.userAgent || '');
@@ -813,23 +845,47 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       }
     }
 
+    function handleNativeSinkStatus(status) {
+      if (status === 'VBCABLE_MISSING') {
+        nativeCoreAudioSinkActive = false;
+        sinkBadge.textContent = 'VB-CABLE Belum Terpasang';
+        sinkBadge.style.color = '#fbbf24';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'VBCABLE_ERROR') {
+        nativeCoreAudioSinkActive = false;
+        sinkBadge.textContent = 'VB-CABLE Sibuk — Klik Segarkan';
+        sinkBadge.style.color = '#f87171';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'VBCABLE_READY') {
+        nativeCoreAudioSinkActive = true;
+        sinkBadge.textContent = 'Terhubung ke VB-CABLE ✓';
+        sinkBadge.style.color = '#34d399';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'BLACKHOLE_MISSING') {
+        nativeCoreAudioSinkActive = false;
+        sinkBadge.textContent = 'BlackHole 2ch Belum Terpasang';
+        sinkBadge.style.color = '#fbbf24';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'BLACKHOLE_READY') {
+        nativeCoreAudioSinkActive = true;
+        sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
+        sinkBadge.style.color = '#34d399';
+        syncStandaloneWorkletConfig();
+      }
+    }
+    window.__onOpungNativeSinkStatus = handleNativeSinkStatus;
+
     if (hasWebView2AudioBridge() && typeof window.chrome.webview.addEventListener === 'function') {
       window.chrome.webview.addEventListener('message', (event) => {
         const msg = typeof event.data === 'string' ? event.data : '';
-        if (msg === 'VBCABLE_MISSING') {
-          nativeCoreAudioSinkActive = false;
-          sinkBadge.textContent = 'VB-CABLE Belum Terpasang';
-          sinkBadge.style.color = '#fbbf24';
-        } else if (msg === 'VBCABLE_READY') {
-          nativeCoreAudioSinkActive = true;
-          sinkBadge.textContent = 'Terhubung ke VB-CABLE ✓';
-          sinkBadge.style.color = '#34d399';
-        }
+        if (msg) handleNativeSinkStatus(msg);
       });
     }
 
     function fitNativeWindowHeight() {
-      const h = document.body ? document.body.offsetHeight : 0;
+      const h = document.body
+        ? Math.max(document.body.scrollHeight || 0, document.body.offsetHeight || 0)
+        : 0;
       if (h > 400) {
         sendNativeBridgeCommand('HEIGHT:' + h);
       }
@@ -952,6 +1008,15 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     if (calibrateRoomBtn) {
       calibrateRoomBtn.addEventListener('click', () => {
+        if (!audioCtx || !currentMicStream) {
+          if (calNoteText) {
+            calNoteText.style.display = 'block';
+            calNoteText.textContent = 'Aktifkan izin mikrofon terlebih dahulu untuk kalibrasi.';
+            fitNativeWindowHeight();
+          }
+          startMacAudioPipeline(micInputSelect.value);
+          return;
+        }
         if (calibrationTimer) clearInterval(calibrationTimer);
         if (calibrationTimeout) clearTimeout(calibrationTimeout);
         const samples = [];
@@ -996,6 +1061,21 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     heroSwitchCard.addEventListener('click', () => {
       isEnabled = !isEnabled;
       syncStandaloneWorkletConfig();
+      if (audioCtx) {
+        if (activeLowPassNode) {
+          activeLowPassNode.frequency.setTargetAtTime(isEnabled ? 7600 : 18000, audioCtx.currentTime, 0.02);
+        }
+        if (activeMakeupGainNode) {
+          activeMakeupGainNode.gain.setTargetAtTime(
+            loopbackAudible ? 0.85 : isEnabled ? 1.65 : 1.0,
+            audioCtx.currentTime,
+            0.02
+          );
+        }
+        if (!isEnabled && activeHardGateGain) {
+          activeHardGateGain.gain.value = 1.0;
+        }
+      }
       if (isEnabled) {
         heroSwitchCard.className = 'hero-switch-card active';
         toggleBtn.className = 'toggle-track active';
@@ -1048,7 +1128,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
       // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
       if (activeMakeupGainNode && audioCtx) {
         activeMakeupGainNode.gain.setTargetAtTime(
-          loopbackAudible ? 0.85 : 1.35,
+          loopbackAudible ? 0.85 : isEnabled ? 1.65 : 1.0,
           audioCtx.currentTime,
           0.02
         );
@@ -1176,11 +1256,25 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
     const refreshDevsBtn = document.getElementById('refreshDevsBtn');
     if (refreshDevsBtn) {
       refreshDevsBtn.addEventListener('click', async () => {
+        if (micNeedsManualRetry || !audioCtx || !currentMicStream) {
+          micTransientRetryCount = 0;
+          await startMacAudioPipeline(micInputSelect.value);
+          return;
+        }
         if (audioCtx && audioCtx.state === 'suspended') {
           await audioCtx.resume().catch(() => {});
         }
-        sendNativeBridgeCommand('SINK:ON');
         await populateMacAudioDevices(micInputSelect.value, '', true);
+      });
+    }
+    const engineStatusEl = document.getElementById('engineStatus');
+    if (engineStatusEl) {
+      engineStatusEl.style.cursor = 'pointer';
+      engineStatusEl.addEventListener('click', () => {
+        if (micNeedsManualRetry || !audioCtx || !currentMicStream) {
+          micTransientRetryCount = 0;
+          startMacAudioPipeline(micInputSelect.value);
+        }
       });
     }
     if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
@@ -1308,6 +1402,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     window.addEventListener('beforeunload', () => {
       audioPipelineSessionId += 1;
+      if (activePcmTapNode && activePcmTapNode.port) {
+        try { activePcmTapNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
+      }
       if (activeWorkletNode && activeWorkletNode.port) {
         try { activeWorkletNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
       }
@@ -1318,7 +1415,19 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
     async function startMacAudioPipeline(selectedInputId) {
       const sessionId = ++audioPipelineSessionId;
+      micNeedsManualRetry = false;
       try {
+        if (activePcmTapNode) {
+          try { activePcmTapNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
+          activePcmTapNode.port.onmessage = null;
+          activePcmTapNode.disconnect();
+          activePcmTapNode = null;
+        }
+        if (window.__opungPostEqTapNode) {
+          window.__opungPostEqTapNode.onaudioprocess = null;
+          window.__opungPostEqTapNode.disconnect();
+          window.__opungPostEqTapNode = null;
+        }
         if (activeWorkletNode) {
           try { activeWorkletNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
           activeWorkletNode.port.onmessage = null;
@@ -1335,9 +1444,11 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         }
         if (currentMicStream) {
           currentMicStream.getTracks().forEach((t) => t.stop());
+          currentMicStream = null;
         }
         if (audioCtx && audioCtx.state !== 'closed') {
           await audioCtx.close().catch(() => {});
+          audioCtx = null;
         }
 
         // 1. Cek daftar perangkat sebelum getUserMedia agar tidak pernah membuka 'default' jika 'default' adalah BlackHole 2ch!
@@ -1436,6 +1547,7 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
         const hardGateGain = audioCtx.createGain();
         hardGateGain.gain.value = 1.0;
+        activeHardGateGain = hardGateGain;
 
         // OTOMATIS AKTIF: 5-Stage Studio HD Vocal Clarity Equalizer + Krisp Vocal Mask
         const subCutNode = audioCtx.createBiquadFilter();
@@ -1445,8 +1557,9 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
 
         const krispLowPassNode = audioCtx.createBiquadFilter();
         krispLowPassNode.type = 'lowpass';
-        krispLowPassNode.frequency.value = 4600;
+        krispLowPassNode.frequency.value = isEnabled ? 7600 : 18000;
         krispLowPassNode.Q.value = 0.707;
+        activeLowPassNode = krispLowPassNode;
 
         const mudCutNode = audioCtx.createBiquadFilter();
         mudCutNode.type = 'peaking';
@@ -1479,10 +1592,11 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         studioCompressor.release.value = 0.15;
 
         const makeupGainNode = audioCtx.createGain();
-        makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.65;
+        makeupGainNode.gain.value = loopbackAudible ? 0.85 : isEnabled ? 1.65 : 1.0;
         activeMakeupGainNode = makeupGainNode;
 
         let processingNode = null;
+        let postEqBridgeTapNode = null;
         const rnnoiseScriptEl = document.getElementById('opung-rnnoise-src');
         if (
           audioCtx.audioWorklet &&
@@ -1526,15 +1640,32 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
                 workletStats.rnnoiseActive = Boolean(msg.rnnoiseActive);
                 const isMutedByGate = isEnabled && !workletStats.isGateOpen && workletStats.smoothedGain === 0.0;
                 hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
-              } else if (msg.type === 'pcm' && msg.buffer && nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
-                const bytes = new Uint8Array(msg.buffer);
-                let bin = '';
-                for (let j = 0; j < bytes.length; j++) {
-                  bin += String.fromCharCode(bytes[j]);
-                }
-                sendNativeBridgeCommand(btoa(bin));
+              } else if (msg.type === 'pcm' && msg.buffer) {
+                sendInt16BufferToNativeBridge(msg.buffer);
               }
             };
+
+            // Post-EQ PCM Tap (setelah 5-Stage Studio HD EQ + Compressor + hardGateGain)
+            // agar Google Meet / Zoom pada macOS (BlackHole) & Windows (VB-CABLE) menerima audio Studio HD utuh!
+            try {
+              const pcmTapNode = new AudioWorkletNode(audioCtx, 'opung-pcm-tap', {
+                numberOfInputs: 1,
+                numberOfOutputs: 1,
+                outputChannelCount: [1],
+              });
+              pcmTapNode.port.onmessage = (ev) => {
+                if (audioPipelineSessionId !== sessionId) return;
+                const msg = ev.data;
+                if (msg && msg.type === 'pcm' && msg.buffer) {
+                  sendInt16BufferToNativeBridge(msg.buffer);
+                }
+              };
+              activePcmTapNode = pcmTapNode;
+              postEqBridgeTapNode = pcmTapNode;
+            } catch (_tapErr) {
+              activePcmTapNode = null;
+            }
+
             activeWorkletNode = workletNode;
             activeAudioEngineMode = 'worklet';
             syncStandaloneWorkletConfig();
@@ -1564,30 +1695,33 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
             })
             .catch(() => {});
 
-          const pcm16Scratch = new Int16Array(512);
-          const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
-
           processorNode.onaudioprocess = (ev) => {
             const inBuf = ev.inputBuffer.getChannelData(0);
             const outBuf = ev.outputBuffer.getChannelData(0);
             dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
             const isMutedByGate = isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0;
             hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
-
-            if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
-              const vocalBoost = loopbackAudible ? 1.15 : 1.85;
-              for (let i = 0; i < outBuf.length; i++) {
-                const rawSample = isMutedByGate ? 0.0 : outBuf[i] * vocalBoost;
-                const clipped = Math.tanh(rawSample);
-                pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
-              }
-              let bin = '';
-              for (let j = 0; j < uint8Scratch.length; j++) {
-                bin += String.fromCharCode(uint8Scratch[j]);
-              }
-              sendNativeBridgeCommand(btoa(bin));
-            }
           };
+
+          if (hasNativeCoreAudioBridge()) {
+            const postEqTap = audioCtx.createScriptProcessor(512, 1, 1);
+            window.__opungPostEqTapNode = postEqTap;
+            const pcm16Scratch = new Int16Array(512);
+            postEqTap.onaudioprocess = (ev) => {
+              const inBuf = ev.inputBuffer.getChannelData(0);
+              const outBuf = ev.outputBuffer.getChannelData(0);
+              outBuf.set(inBuf);
+              if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
+                for (let i = 0; i < inBuf.length; i++) {
+                  const raw = Number.isFinite(inBuf[i]) ? inBuf[i] : 0.0;
+                  const clipped = Math.tanh(raw);
+                  pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
+                }
+                sendInt16BufferToNativeBridge(pcm16Scratch.buffer);
+              }
+            };
+            postEqBridgeTapNode = postEqTap;
+          }
           processingNode = processorNode;
         }
 
@@ -1624,10 +1758,16 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         makeupGainNode.connect(hardGateGain);
         hardGateGain.connect(cleanAnalyser);
         cleanAnalyser.connect(cleanDest);
-        cleanAnalyser.connect(keepAliveGain);
+        if (postEqBridgeTapNode) {
+          hardGateGain.connect(postEqBridgeTapNode);
+          postEqBridgeTapNode.connect(keepAliveGain);
+        } else {
+          cleanAnalyser.connect(keepAliveGain);
+        }
         keepAliveGain.connect(audioCtx.destination);
 
         currentCleanStream = cleanDest.stream;
+        micTransientRetryCount = 0;
 
         if (loopbackAudible) {
           await routeEarphoneLoopbackToPhysicalDevice();
@@ -1653,9 +1793,32 @@ export const MACOS_STANDALONE_APP_HTML = `<!doctype html>
         }
         await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
       } catch (err) {
-        document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
+        const errName = err && err.name ? String(err.name) : '';
+        const isPermanentMicError =
+          errName === 'NotAllowedError' ||
+          errName === 'PermissionDeniedError' ||
+          errName === 'NotFoundError' ||
+          errName === 'DevicesNotFoundError' ||
+          errName === 'SecurityError';
+        const badge = document.getElementById('engineStatus');
+        if (isPermanentMicError || micTransientRetryCount >= 2) {
+          micNeedsManualRetry = true;
+          if (badge) {
+            badge.textContent =
+              errName === 'NotFoundError' || errName === 'DevicesNotFoundError'
+                ? 'Mikrofon Tidak Ditemukan (Klik Ulang)'
+                : 'Izin Mikrofon Diperlukan (Klik Ulang)';
+          }
+          return;
+        }
+        micTransientRetryCount++;
+        if (badge) {
+          badge.textContent = 'Menghubungkan Mikrofon...';
+        }
         setTimeout(() => {
-          startMacAudioPipeline(selectedInputId);
+          if (audioPipelineSessionId === sessionId) {
+            startMacAudioPipeline(selectedInputId);
+          }
         }, 1200);
       }
     }
@@ -1782,15 +1945,16 @@ export const MACOS_NATIVE_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreAudio/CoreAudio.h>
 #import <AudioToolbox/AudioToolbox.h>
+#include <math.h>
 
 #define OPUNG_RING_SIZE 65536
 #define OPUNG_RING_MASK (OPUNG_RING_SIZE - 1)
 #define OPUNG_MAX_HAL_UNITS 4
 
 static float gBlackHoleRing[OPUNG_RING_SIZE];
-static volatile uint32_t gRingWriteIdx = 0;
-static volatile int gSinkEnabled = 1;
-static volatile uint32_t gRenderHeartbeat = 0;
+static uint32_t gRingWriteIdx = 0;
+static int gSinkEnabled = 1;
+static uint32_t gRenderHeartbeat = 0;
 
 typedef struct {
     AudioComponentInstance unit;
@@ -1873,9 +2037,17 @@ static int findAllVirtualAudioDeviceIDs(AudioDeviceID *outIDs, int maxCount) {
         };
         if (AudioObjectGetPropertyData(devID, &nameAddr, 0, NULL, &nameSize, &cfName) == noErr && cfName != NULL) {
             NSString *name = [(__bridge NSString *)cfName lowercaseString];
-            if ([name containsString:@"blackhole"] || [name containsString:@"opung"] || [name containsString:@"vb-cable"] || [name containsString:@"soundflower"]) {
+            // Abaikan driver lama "OPUNG.driver" agar tidak duplikat; fokus pada BlackHole 2ch / VB-CABLE / Soundflower
+            if (![name containsString:@"opung"] &&
+                ([name containsString:@"blackhole"] || [name containsString:@"vb-cable"] || [name containsString:@"soundflower"])) {
                 ensureDeviceUnmutedAndFullVolume(devID);
-                outIDs[foundCount++] = devID;
+                if ([name containsString:@"blackhole"] && foundCount > 0) {
+                    // Prioritaskan BlackHole 2ch pada slot pertama
+                    outIDs[foundCount++] = outIDs[0];
+                    outIDs[0] = devID;
+                } else {
+                    outIDs[foundCount++] = devID;
+                }
             }
             CFRelease(cfName);
         }
@@ -1894,10 +2066,11 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     int unitIdx = (int)(uintptr_t)inRefCon;
     if (unitIdx < 0 || unitIdx >= OPUNG_MAX_HAL_UNITS) return noErr;
 
-    gRenderHeartbeat++;
+    __atomic_fetch_add(&gRenderHeartbeat, 1, __ATOMIC_RELAXED);
     OpungHalSinkUnit *sink = &gHalUnits[unitIdx];
     double step = (sink->sampleRate > 8000.0) ? (48000.0 / sink->sampleRate) : 1.0;
-    uint32_t w = gRingWriteIdx;
+    uint32_t w = __atomic_load_n(&gRingWriteIdx, __ATOMIC_ACQUIRE);
+    int sinkOn = __atomic_load_n(&gSinkEnabled, __ATOMIC_ACQUIRE);
 
     // Hitung jumlah sampel yang tersedia di ring buffer untuk unit ini
     uint32_t rInt = ((uint32_t)sink->readPos) & OPUNG_RING_MASK;
@@ -1911,7 +2084,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     for (UInt32 f = 0; f < inNumberFrames; f++) {
         float s = 0.0f;
         uint32_t curR = ((uint32_t)sink->readPos) & OPUNG_RING_MASK;
-        if (curR != w && gSinkEnabled) {
+        if (curR != w && sinkOn) {
             uint32_t nextR = (curR + 1) & OPUNG_RING_MASK;
             float frac = (float)(sink->readPos - floor(sink->readPos));
             float s0 = gBlackHoleRing[curR];
@@ -2031,7 +2204,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
         gHalUnits[slot].unit = unit;
         gHalUnits[slot].deviceID = bhID;
         gHalUnits[slot].sampleRate = hwSampleRate;
-        gHalUnits[slot].readPos = (double)gRingWriteIdx;
+        gHalUnits[slot].readPos = (double)__atomic_load_n(&gRingWriteIdx, __ATOMIC_ACQUIRE);
         gHalUnits[slot].active = NO;
 
         AURenderCallbackStruct cb = {0};
@@ -2052,8 +2225,16 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
 
     gHalUnitCount = startedCount;
     self.blackHoleRunning = (startedCount > 0);
-    self.lastCheckedHeartbeat = gRenderHeartbeat;
+    self.lastCheckedHeartbeat = __atomic_load_n(&gRenderHeartbeat, __ATOMIC_RELAXED);
     self.heartbeatStallCount = 0;
+}
+
+- (void)notifyWebViewSinkStatus:(NSString *)status {
+    if (!self.webView || !status) return;
+    NSString *js = [NSString stringWithFormat:@"window.__onOpungNativeSinkStatus && window.__onOpungNativeSinkStatus('%@');", status];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
 }
 
 - (void)userContentController:(WKUserContentController *)userContentController
@@ -2064,7 +2245,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     NSString *body = (NSString *)message.body;
     if ([body hasPrefix:@"HEIGHT:"]) {
         CGFloat h = [[body substringFromIndex:7] doubleValue];
-        if (h >= 420.0 && h <= 700.0 && self.window) {
+        if (h >= 460.0 && h <= 760.0 && self.window) {
             NSRect oldFrame = self.window.frame;
             NSRect contentRect = [self.window contentRectForFrameRect:oldFrame];
             CGFloat deltaH = ceil(h) - contentRect.size.height;
@@ -2081,12 +2262,13 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     }
     if ([body hasPrefix:@"SINK:"]) {
         if ([body isEqualToString:@"SINK:ON"]) {
-            gSinkEnabled = 1;
+            __atomic_store_n(&gSinkEnabled, 1, __ATOMIC_RELEASE);
             if (!self.blackHoleRunning) {
                 [self startBlackHoleHalOutput];
             }
+            [self notifyWebViewSinkStatus:(self.blackHoleRunning ? @"BLACKHOLE_READY" : @"BLACKHOLE_MISSING")];
         } else {
-            gSinkEnabled = 0;
+            __atomic_store_n(&gSinkEnabled, 0, __ATOMIC_RELEASE);
         }
         return;
     }
@@ -2094,7 +2276,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     if (!self.blackHoleRunning) {
         [self startBlackHoleHalOutput];
     } else {
-        uint32_t curHb = gRenderHeartbeat;
+        uint32_t curHb = __atomic_load_n(&gRenderHeartbeat, __ATOMIC_RELAXED);
         if (curHb == self.lastCheckedHeartbeat) {
             self.heartbeatStallCount++;
             if (self.heartbeatStallCount > 35) {
@@ -2113,12 +2295,12 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
 
     const int16_t *samples = (const int16_t *)pcmData.bytes;
     NSUInteger count = pcmData.length / sizeof(int16_t);
-    uint32_t w = gRingWriteIdx;
+    uint32_t w = __atomic_load_n(&gRingWriteIdx, __ATOMIC_RELAXED);
     for (NSUInteger i = 0; i < count; i++) {
         gBlackHoleRing[w] = ((float)samples[i]) / 32768.0f;
         w = (w + 1) & OPUNG_RING_MASK;
     }
-    gRingWriteIdx = w;
+    __atomic_store_n(&gRingWriteIdx, w, __ATOMIC_RELEASE);
 }
 
 - (void)setupMainMenu {
@@ -2178,6 +2360,41 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     return logo;
 }
 
+- (void)openBlackHoleDownloadPage:(id)sender {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://existential.audio/blackhole/"]];
+}
+
+- (void)handleStatusItemClick:(id)sender {
+    NSEvent *event = [NSApp currentEvent];
+    BOOL isRightClick = event && (event.type == NSEventTypeRightMouseUp || (event.modifierFlags & NSEventModifierFlagControl));
+    if (isRightClick && self.statusItem) {
+        NSMenu *menu = [[NSMenu alloc] init];
+        NSMenuItem *toggleItem = [[NSMenuItem alloc] initWithTitle:@"Buka / Sembunyikan Opung"
+                                                            action:@selector(toggleMenuBarWindow:)
+                                                     keyEquivalent:@""];
+        [toggleItem setTarget:self];
+        [menu addItem:toggleItem];
+
+        NSMenuItem *bhItem = [[NSMenuItem alloc] initWithTitle:@"Pasang Driver BlackHole 2ch..."
+                                                        action:@selector(openBlackHoleDownloadPage:)
+                                                 keyEquivalent:@""];
+        [bhItem setTarget:self];
+        [menu addItem:bhItem];
+
+        [menu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Keluar dari Opung"
+                                                          action:@selector(terminate:)
+                                                   keyEquivalent:@"q"];
+        [menu addItem:quitItem];
+
+        self.statusItem.menu = menu;
+        [self.statusItem.button performClick:nil];
+        self.statusItem.menu = nil;
+        return;
+    }
+    [self toggleMenuBarWindow:sender];
+}
+
 - (void)setupMenuBarStatusItem {
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
     NSStatusBarButton *button = self.statusItem.button;
@@ -2190,7 +2407,8 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
         button.title = @"";
         button.toolTip = @"Opung - Office Proximity Ultra Noise Gate";
         button.target = self;
-        button.action = @selector(toggleMenuBarWindow:);
+        button.action = @selector(handleStatusItemClick:);
+        [button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
     }
 }
 
@@ -2204,7 +2422,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
     if (statusWindow) {
         NSRect buttonFrame = statusWindow.frame;
         NSRect winFrame = self.window.frame;
-        if (buttonFrame.origin.y > 100 && buttonFrame.origin.x > 0) {
+        if (buttonFrame.size.width > 0 && buttonFrame.size.height > 0) {
             CGFloat x = NSMidX(buttonFrame) - (NSWidth(winFrame) / 2.0);
             CGFloat y = NSMinY(buttonFrame) - NSHeight(winFrame) - 6.0;
             NSScreen *screen = statusWindow.screen ?: [NSScreen mainScreen];
@@ -2215,6 +2433,9 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
                 }
                 if (x < NSMinX(visible) + 8.0) {
                     x = NSMinX(visible) + 8.0;
+                }
+                if (y < NSMinY(visible) + 8.0) {
+                    y = NSMinY(visible) + 8.0;
                 }
             }
             [self.window setFrameOrigin:NSMakePoint(x, y)];
@@ -2250,7 +2471,7 @@ static OSStatus opungBlackHoleRenderCallback(void *inRefCon,
         [NSApp setApplicationIconImage:appIcon];
     }
 
-    NSRect frame = NSMakeRect(0, 0, 390, 526);
+    NSRect frame = NSMakeRect(0, 0, 390, 590);
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
     self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:style backing:NSBackingStoreBuffered defer:NO];
     [self.window setTitle:@"Opung - Office Proximity Ultra Noise Gate"];
@@ -2324,6 +2545,11 @@ decisionHandler:(void (^)(NSInteger decision))decisionHandler {
     return NO;
 }
 
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    __atomic_store_n(&gSinkEnabled, 0, __ATOMIC_RELEASE);
+    [self stopAllBlackHoleHalUnits];
+}
+
 @end
 
 int main(int argc, const char * argv[]) {
@@ -2356,7 +2582,7 @@ function run(argv) {
   const app = $.NSApplication.sharedApplication;
   app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
 
-  const rect = $.NSMakeRect(0, 0, 390, 526);
+  const rect = $.NSMakeRect(0, 0, 390, 590);
   const styleMask = (1 << 0) | (1 << 1) | (1 << 2);
   const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
     rect,
@@ -2613,11 +2839,12 @@ SHADOW_APP_DIR="$SHADOW_BUNDLE/Contents/Resources/app"
 SHADOW_BIN="$SHADOW_MACOS_DIR/RNNoiseStudioNativeV17"
 LOCAL_BIN="$MACOS_DIR/RNNoiseStudioNativeV17"
 
-# 1. Jalur Cepat Instan (0.01 detik): Jika binary V17 sudah ada di bundle lokal atau di /tmp shadow bundle
+# 1. Jalur Cepat Instan (0.01 detik): Jika binary V17 sudah ada di bundle lokal atau di /tmp shadow bundle yang masih sinkron
 if [ -x "$LOCAL_BIN" ]; then
   launch_native_detached "$LOCAL_BIN" "$HTML_FILE"
 fi
-if [ -x "$SHADOW_BIN" ] && [ -f "$SHADOW_APP_DIR/index.html" ]; then
+if [ -x "$SHADOW_BIN" ] && [ -f "$SHADOW_APP_DIR/native_host.m" ] && cmp -s "$APP_DIR/native_host.m" "$SHADOW_APP_DIR/native_host.m" 2>/dev/null; then
+  cp -f "$HTML_FILE" "$SHADOW_APP_DIR/index.html" 2>/dev/null || true
   launch_native_detached "$SHADOW_BIN" "$SHADOW_APP_DIR/index.html"
 fi
 
@@ -2631,6 +2858,7 @@ else
   cp -f "$BUNDLE_DIR/Contents/Info.plist" "$SHADOW_BUNDLE/Contents/Info.plist" 2>/dev/null || true
   cp -f "$BUNDLE_DIR/Contents/Resources/AppIcon.icns" "$SHADOW_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
   cp -f "$HTML_FILE" "$SHADOW_APP_DIR/index.html" 2>/dev/null || true
+  cp -f "$APP_DIR/native_host.m" "$SHADOW_APP_DIR/native_host.m" 2>/dev/null || true
   TARGET_BIN="$SHADOW_BIN"
   TARGET_HTML="$SHADOW_APP_DIR/index.html"
 fi

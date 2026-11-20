@@ -195,7 +195,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
     if (clarityNodesRef.current && audioCtxRef.current) {
       const now = audioCtxRef.current.currentTime;
       clarityNodesRef.current.krispLowPassNode.frequency.setTargetAtTime(
-        krispModeEnabled ? 4600 : 18000,
+        krispModeEnabled ? 7600 : 18000,
         now,
         0.02
       );
@@ -703,7 +703,7 @@ export const MacOSDesktopAppWorkspace: React.FC = () => {
 
         const krispLowPassNode = ctx.createBiquadFilter();
         krispLowPassNode.type = 'lowpass';
-        krispLowPassNode.frequency.value = useKrispMode ? 4600 : 18000;
+        krispLowPassNode.frequency.value = useKrispMode ? 7600 : 18000;
         krispLowPassNode.Q.value = 0.707;
 
         const mudCutNode = ctx.createBiquadFilter();

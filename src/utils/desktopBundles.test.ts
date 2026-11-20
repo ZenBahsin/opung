@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import { execFileSync } from 'node:child_process';
 import {
+  MACOS_NATIVE_LAUNCHER_SH,
+  MACOS_NATIVE_OBJC_SOURCE,
   MACOS_STANDALONE_APP_HTML,
   buildMacOSDiskImageDmg,
 } from './macosAppBuilder';
 import { buildWindowsLauncherZip } from './windowsAppBuilder';
+import { OPUNG_WORKLET_PROCESSOR_BODY } from './opungWorkletBuilder';
+import { NearFieldHybridDspCore } from './hybridDspCore';
 
 function extractScriptBlocks(html: string): string[] {
   const blocks: string[] = [];
@@ -122,4 +127,92 @@ test('buildWindowsLauncherZip builds valid PKZIP archive containing RNNoise WASM
   assert.equal(zipBytes[0], 0x50); // 'P'
   assert.equal(zipBytes[1], 0x4b); // 'K'
   assert.ok(zipBytes.byteLength > 1_900_000);
+});
+
+test('MACOS_NATIVE_LAUNCHER_SH passes bash -n syntax validation cleanly', () => {
+  assert.doesNotThrow(() => {
+    execFileSync('bash', ['-n'], {
+      input: MACOS_NATIVE_LAUNCHER_SH,
+      encoding: 'utf8',
+    });
+  });
+  // Shadow cache must verify native_host.m freshness and refresh index.html
+  assert.match(MACOS_NATIVE_LAUNCHER_SH, /cmp -s "\$APP_DIR\/native_host\.m" "\$SHADOW_APP_DIR\/native_host\.m"/);
+});
+
+test('MACOS_NATIVE_OBJC_SOURCE enforces ARM64 atomic ring ops, excludes deprecated opung driver, and cleans up on terminate', () => {
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /#include <math\.h>/);
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /__atomic_load_n\(&gRingWriteIdx, __ATOMIC_ACQUIRE\)/);
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /__atomic_store_n\(&gRingWriteIdx, w, __ATOMIC_RELEASE\)/);
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /!\[name containsString:@"opung"\]/);
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /applicationWillTerminate:/);
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /BLACKHOLE_MISSING/);
+  assert.match(MACOS_NATIVE_OBJC_SOURCE, /NSEventMaskRightMouseUp/);
+});
+
+test('OPUNG_WORKLET_PROCESSOR_BODY registers both opung-hybrid-processor and post-EQ opung-pcm-tap', () => {
+  const registered = new Map<string, new () => {
+    port: { onmessage: ((ev: { data: unknown }) => void) | null; postMessage: (msg: unknown, transfers?: unknown[]) => void };
+    process: (inputs: Float32Array[][], outputs: Float32Array[][]) => boolean;
+  }>();
+
+  const postedMessages: unknown[] = [];
+  class MockAudioWorkletProcessor {
+    port = {
+      onmessage: null as ((ev: { data: unknown }) => void) | null,
+      postMessage: (msg: unknown) => {
+        postedMessages.push(msg);
+      },
+    };
+  }
+
+  const sandbox: Record<string, unknown> = {
+    AudioWorkletProcessor: MockAudioWorkletProcessor,
+    registerProcessor: (name: string, ctor: never) => registered.set(name, ctor),
+    Float32Array,
+    Int16Array,
+    Math,
+    Number,
+    Boolean,
+  };
+  sandbox.globalThis = sandbox;
+
+  new vm.Script(OPUNG_WORKLET_PROCESSOR_BODY, { filename: 'opung-worklet.js' }).runInNewContext(sandbox);
+
+  assert.ok(registered.has('opung-hybrid-processor'), 'Must register opung-hybrid-processor');
+  assert.ok(registered.has('opung-pcm-tap'), 'Must register opung-pcm-tap');
+
+  const TapCtor = registered.get('opung-pcm-tap')!;
+  const tap = new TapCtor();
+  const inQuantum = new Float32Array(128).fill(0.5);
+  const outQuantum = new Float32Array(128);
+
+  // When streaming is disabled, no PCM buffers should be posted
+  for (let i = 0; i < 4; i++) {
+    tap.process([[inQuantum]], [[outQuantum]]);
+  }
+  assert.equal(postedMessages.length, 0);
+  assert.ok(Math.abs(outQuantum[0] - 0.5) < 1e-6);
+
+  // Enable streaming -> 4 x 128 = 512 samples triggers 1 Int16 PCM buffer message
+  tap.port.onmessage?.({ data: { type: 'config', streaming: true } });
+  for (let i = 0; i < 4; i++) {
+    tap.process([[inQuantum]], [[outQuantum]]);
+  }
+  assert.equal(postedMessages.length, 1);
+  const pcmMsg = postedMessages[0] as { type: string; buffer: ArrayBuffer };
+  assert.equal(pcmMsg.type, 'pcm');
+  assert.equal(pcmMsg.buffer.byteLength, 512 * 2);
+});
+
+test('NearFieldHybridDspCore still updates lastFrameDb accurately during bypass mode for calibration', () => {
+  const core = new NearFieldHybridDspCore(null);
+  const loudInput = new Float32Array(512);
+  for (let i = 0; i < loudInput.length; i++) {
+    loudInput[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / 48000);
+  }
+  const output = new Float32Array(512);
+  core.processAudioBlock(loudInput, output, false, -26, true, false);
+  // RMS of 0.25 sine is ~0.1768 => ~ -15 dBFS (must not stay stuck at -75 dB!)
+  assert.ok(core.lastFrameDb > -20 && core.lastFrameDb < -10, `Expected ~-15 dB, got ${core.lastFrameDb}`);
 });

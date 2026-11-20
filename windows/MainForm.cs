@@ -9,13 +9,21 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace Opung.Windows;
 
 public sealed class MainForm : Form
 {
     private const int FixedLogicalWidth = 390;
-    private const int DefaultLogicalHeight = 532;
+    private const int DefaultLogicalHeight = 590;
+
+    private enum VbCableStartResult
+    {
+        Ready,
+        Missing,
+        Error,
+    }
 
     private readonly WebView2 _webView;
     private readonly NotifyIcon _trayIcon;
@@ -23,10 +31,12 @@ public sealed class MainForm : Form
     private readonly object _audioLock = new();
 
     private WasapiOut? _wasapiOut;
+    private MMDevice? _activeVbCableDevice;
     private BufferedWaveProvider? _waveBuffer;
-    private byte[] _stereoScratch = Array.Empty<byte>();
+    private int _currentLogicalHeight = DefaultLogicalHeight;
     private bool _sinkEnabled;
     private bool _allowClose;
+    private bool _cleanedUp;
     private bool _vbCablePromptShown;
 
     public MainForm()
@@ -41,7 +51,7 @@ public sealed class MainForm : Form
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(9, 13, 22);
-        ClientSize = new Size(FixedLogicalWidth, DefaultLogicalHeight);
+        ClientSize = ScaleLogicalSize(FixedLogicalWidth, _currentLogicalHeight);
 
         _webView = new WebView2
         {
@@ -72,7 +82,27 @@ public sealed class MainForm : Form
         };
 
         Load += async (_, _) => await InitializeWebViewAsync();
+        DpiChanged += (_, _) => ApplyLogicalClientSize(_currentLogicalHeight);
         FormClosing += OnMainFormClosing;
+    }
+
+    private Size ScaleLogicalSize(int logicalWidth, int logicalHeight)
+    {
+        float dpiScale = DeviceDpi > 0 ? DeviceDpi / 96.0f : 1.0f;
+        return new Size(
+            (int)Math.Ceiling(logicalWidth * dpiScale),
+            (int)Math.Ceiling(logicalHeight * dpiScale)
+        );
+    }
+
+    private void ApplyLogicalClientSize(int logicalHeight)
+    {
+        _currentLogicalHeight = Math.Clamp(logicalHeight, 480, 760);
+        var scaled = ScaleLogicalSize(FixedLogicalWidth, _currentLogicalHeight);
+        if (ClientSize != scaled)
+        {
+            ClientSize = scaled;
+        }
     }
 
     private async System.Threading.Tasks.Task InitializeWebViewAsync()
@@ -166,21 +196,21 @@ public sealed class MainForm : Form
             if (int.TryParse(message.AsSpan(7), out int rawHeight))
             {
                 int targetHeight = Math.Clamp(rawHeight, 480, 760);
-                BeginInvoke(() =>
-                {
-                    if (ClientSize.Height != targetHeight || ClientSize.Width != FixedLogicalWidth)
-                    {
-                        ClientSize = new Size(FixedLogicalWidth, targetHeight);
-                    }
-                });
+                BeginInvoke(() => ApplyLogicalClientSize(targetHeight));
             }
             return;
         }
 
         if (message == "SINK:ON")
         {
-            bool started = StartVirtualCableOutput();
-            NotifyWebViewSinkStatus(started ? "VBCABLE_READY" : "VBCABLE_MISSING");
+            var result = StartVirtualCableOutput();
+            string statusMsg = result switch
+            {
+                VbCableStartResult.Ready => "VBCABLE_READY",
+                VbCableStartResult.Missing => "VBCABLE_MISSING",
+                _ => "VBCABLE_ERROR",
+            };
+            NotifyWebViewSinkStatus(statusMsg);
             return;
         }
 
@@ -198,7 +228,7 @@ public sealed class MainForm : Form
 
     private void NotifyWebViewSinkStatus(string statusMessage)
     {
-        if (_webView.CoreWebView2 == null)
+        if (IsDisposed || _webView.CoreWebView2 == null)
         {
             return;
         }
@@ -206,7 +236,10 @@ public sealed class MainForm : Form
         {
             try
             {
-                _webView.CoreWebView2?.PostWebMessageAsString(statusMessage);
+                if (!IsDisposed)
+                {
+                    _webView.CoreWebView2?.PostWebMessageAsString(statusMessage);
+                }
             }
             catch
             {
@@ -215,32 +248,48 @@ public sealed class MainForm : Form
         });
     }
 
-    private bool StartVirtualCableOutput()
+    private VbCableStartResult StartVirtualCableOutput()
     {
         lock (_audioLock)
         {
             if (_wasapiOut != null && _sinkEnabled)
             {
-                return true;
+                return VbCableStartResult.Ready;
             }
 
             StopVirtualCableOutputLocked();
 
+            MMDevice? selectedDevice = null;
             try
             {
                 using var enumerator = new MMDeviceEnumerator();
                 var renderDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
 
-                MMDevice? vbCableDevice = renderDevices.FirstOrDefault(d =>
+                foreach (var device in renderDevices)
                 {
-                    var name = (d.FriendlyName ?? string.Empty).ToLowerInvariant();
-                    return name.Contains("cable input") ||
-                           name.Contains("vb-audio") ||
-                           name.Contains("vb-cable") ||
-                           name.Contains("voicemeeter input");
-                });
+                    var name = (device.FriendlyName ?? string.Empty).ToLowerInvariant();
+                    bool isMatch =
+                        name.Contains("cable input") ||
+                        name.Contains("vb-audio") ||
+                        name.Contains("vb-cable") ||
+                        name.Contains("voicemeeter input");
 
-                if (vbCableDevice == null)
+                    if (isMatch && selectedDevice == null)
+                    {
+                        selectedDevice = device;
+                    }
+                    else if (isMatch && selectedDevice != null && name.Contains("cable input"))
+                    {
+                        selectedDevice.Dispose();
+                        selectedDevice = device;
+                    }
+                    else
+                    {
+                        device.Dispose();
+                    }
+                }
+
+                if (selectedDevice == null)
                 {
                     _sinkEnabled = false;
                     if (!_vbCablePromptShown)
@@ -260,28 +309,53 @@ public sealed class MainForm : Form
                             }
                         });
                     }
-                    return false;
+                    return VbCableStartResult.Missing;
                 }
 
-                // 48 kHz 16-bit Stereo PCM agar cocok 100% dengan default VB-Audio Virtual Cable
-                var stereoFormat = new WaveFormat(48000, 16, 2);
-                _waveBuffer = new BufferedWaveProvider(stereoFormat)
+                // Buffer input 48 kHz 16-bit Mono PCM dari AudioWorklet Opung,
+                // lalu otomatis di-resample ke MixFormat asli VB-CABLE (44.1 kHz / 48 kHz / 96 kHz, 1/2/N channel, IEEE Float)
+                var inputMonoFormat = new WaveFormat(48000, 16, 1);
+                _waveBuffer = new BufferedWaveProvider(inputMonoFormat)
                 {
                     BufferDuration = TimeSpan.FromMilliseconds(220),
                     DiscardOnBufferOverflow = true,
                     ReadFully = true,
                 };
 
-                _wasapiOut = new WasapiOut(vbCableDevice, AudioClientShareMode.Shared, false, 30);
-                _wasapiOut.Init(_waveBuffer);
+                WaveFormat mixFormat = selectedDevice.AudioClient.MixFormat;
+                ISampleProvider sampleProvider = _waveBuffer.ToSampleProvider();
+                if (sampleProvider.WaveFormat.SampleRate != mixFormat.SampleRate)
+                {
+                    sampleProvider = new WdlResamplingSampleProvider(sampleProvider, mixFormat.SampleRate);
+                }
+
+                if (mixFormat.Channels == 2 && sampleProvider.WaveFormat.Channels == 1)
+                {
+                    sampleProvider = new MonoToStereoSampleProvider(sampleProvider);
+                }
+                else if (mixFormat.Channels > 2 && sampleProvider.WaveFormat.Channels == 1)
+                {
+                    var mux = new MultiplexingSampleProvider(new[] { sampleProvider }, mixFormat.Channels);
+                    for (int ch = 0; ch < mixFormat.Channels; ch++)
+                    {
+                        mux.ConnectInputToOutput(0, ch);
+                    }
+                    sampleProvider = mux;
+                }
+
+                _activeVbCableDevice = selectedDevice;
+                selectedDevice = null;
+                _wasapiOut = new WasapiOut(_activeVbCableDevice, AudioClientShareMode.Shared, false, 30);
+                _wasapiOut.Init(sampleProvider.ToWaveProvider());
                 _wasapiOut.Play();
                 _sinkEnabled = true;
-                return true;
+                return VbCableStartResult.Ready;
             }
             catch
             {
+                selectedDevice?.Dispose();
                 StopVirtualCableOutputLocked();
-                return false;
+                return VbCableStartResult.Error;
             }
         }
     }
@@ -298,7 +372,8 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (monoBytes.Length < 2)
+        int alignedBytes = monoBytes.Length & ~1;
+        if (alignedBytes < 2)
         {
             return;
         }
@@ -310,27 +385,7 @@ public sealed class MainForm : Form
                 return;
             }
 
-            int stereoLength = monoBytes.Length * 2;
-            if (_stereoScratch.Length < stereoLength)
-            {
-                _stereoScratch = new byte[stereoLength];
-            }
-
-            // Duplikasi sampel mono Int16 menjadi Stereo (L + R) untuk VB-CABLE
-            int samplePairs = monoBytes.Length / 2;
-            for (int i = 0; i < samplePairs; i++)
-            {
-                int srcIdx = i * 2;
-                int dstIdx = i * 4;
-                byte lo = monoBytes[srcIdx];
-                byte hi = monoBytes[srcIdx + 1];
-                _stereoScratch[dstIdx] = lo;
-                _stereoScratch[dstIdx + 1] = hi;
-                _stereoScratch[dstIdx + 2] = lo;
-                _stereoScratch[dstIdx + 3] = hi;
-            }
-
-            _waveBuffer.AddSamples(_stereoScratch, 0, samplePairs * 4);
+            _waveBuffer.AddSamples(monoBytes, 0, alignedBytes);
         }
     }
 
@@ -358,6 +413,18 @@ public sealed class MainForm : Form
             }
             _wasapiOut = null;
         }
+        if (_activeVbCableDevice != null)
+        {
+            try
+            {
+                _activeVbCableDevice.Dispose();
+            }
+            catch
+            {
+                // Ignore cleanup error
+            }
+            _activeVbCableDevice = null;
+        }
         _waveBuffer = null;
     }
 
@@ -378,6 +445,25 @@ public sealed class MainForm : Form
         }
     }
 
+    private void CleanupResourcesOnce()
+    {
+        if (_cleanedUp)
+        {
+            return;
+        }
+        _cleanedUp = true;
+        StopVirtualCableOutput();
+        try
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+        }
+        catch
+        {
+            // Ignore tray cleanup failure
+        }
+    }
+
     private void OnMainFormClosing(object? sender, FormClosingEventArgs e)
     {
         if (!_allowClose && e.CloseReason == CloseReason.UserClosing)
@@ -393,17 +479,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        StopVirtualCableOutput();
-        _trayIcon.Visible = false;
-        _trayIcon.Dispose();
+        CleanupResourcesOnce();
     }
 
     private void ExitApplication()
     {
         _allowClose = true;
-        StopVirtualCableOutput();
-        _trayIcon.Visible = false;
-        _trayIcon.Dispose();
+        CleanupResourcesOnce();
         Close();
         Application.Exit();
     }

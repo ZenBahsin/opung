@@ -253,6 +253,13 @@ export const OPUNG_WORKLET_PROCESSOR_BODY = `
       if (!enabled) {
         this.wasEnabled = false;
         outputBuffer.set(inputBuffer);
+        let sumSq = 0;
+        for (let i = 0; i < inputBuffer.length; i++) {
+          const s = Number.isFinite(inputBuffer[i]) ? inputBuffer[i] : 0;
+          sumSq += s * s;
+        }
+        const rms = inputBuffer.length > 0 ? Math.sqrt(sumSq / inputBuffer.length) : 0;
+        this.lastFrameDb = Math.round(20.0 * Math.log10(Math.max(1e-4, rms)));
         this.isGateOpen = true;
         this.smoothedGain = 1.0;
         return;
@@ -369,6 +376,63 @@ export const OPUNG_WORKLET_PROCESSOR_BODY = `
   }
 
   registerProcessor('opung-hybrid-processor', OpungHybridWorkletProcessor);
+
+  class OpungPcmTapProcessor extends AudioWorkletProcessor {
+    constructor() {
+      super();
+      this.alive = true;
+      this.streaming = false;
+      this.pcmAcc = new Int16Array(512);
+      this.pcmPos = 0;
+      this.port.onmessage = (ev) => {
+        const msg = ev.data || {};
+        if (msg.type === 'config') {
+          if (typeof msg.streaming === 'boolean') {
+            this.streaming = msg.streaming;
+            if (!this.streaming) {
+              this.pcmPos = 0;
+            }
+          }
+        } else if (msg.type === 'destroy') {
+          this.alive = false;
+          this.streaming = false;
+        }
+      };
+    }
+
+    process(inputs, outputs) {
+      if (!this.alive) return false;
+      const inCh = inputs[0] && inputs[0][0];
+      const outCh = outputs[0] && outputs[0][0];
+
+      if (outCh) {
+        if (inCh && inCh.length > 0) {
+          outCh.set(inCh);
+        } else {
+          outCh.fill(0);
+        }
+      }
+
+      if (!this.streaming || !inCh || inCh.length === 0) {
+        return true;
+      }
+
+      for (let i = 0; i < inCh.length; i++) {
+        const raw = Number.isFinite(inCh[i]) ? inCh[i] : 0.0;
+        const clipped = Math.tanh(raw);
+        this.pcmAcc[this.pcmPos++] = clipped < 0 ? clipped * 32768 : clipped * 32767;
+        if (this.pcmPos >= 512) {
+          const copy = new Int16Array(this.pcmAcc);
+          this.port.postMessage({ type: 'pcm', buffer: copy.buffer }, [copy.buffer]);
+          this.pcmPos = 0;
+        }
+      }
+
+      return true;
+    }
+  }
+
+  registerProcessor('opung-pcm-tap', OpungPcmTapProcessor);
 })();
 `;
 

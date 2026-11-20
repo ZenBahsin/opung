@@ -12,7 +12,8 @@
       background: #090d16;
       color: #f8fafc;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     body {
       padding: 12px 15px 9px 15px;
@@ -949,7 +950,7 @@ run();
 })();
 (typeof globalThis !== "undefined" ? globalThis : window).__createOpungRnnoiseSync = createRNNWasmModuleSync;</script>
   <script>
-    const OPUNG_WORKLET_BODY = "\n(function () {\n  const RNNOISE_FRAME_SIZE = 480;\n  const RING_CAPACITY = 4096;\n  const PCM16_SCALE = 32768.0;\n\n  function createWorkletRnnoiseEngine() {\n    const factory = globalThis.__createOpungRnnoiseSync;\n    if (typeof factory !== 'function') {\n      return null;\n    }\n    try {\n      const mod = factory();\n      if (!mod || typeof mod._rnnoise_create !== 'function') {\n        return null;\n      }\n      const ctxPtr = mod._rnnoise_create(0);\n      if (!ctxPtr) return null;\n      const framePtr = mod._malloc(RNNOISE_FRAME_SIZE * 4);\n      if (!framePtr) {\n        mod._rnnoise_destroy(ctxPtr);\n        return null;\n      }\n      let destroyed = false;\n      return {\n        processFrameInPlace(frame480) {\n          if (destroyed) return 0;\n          const heapOffset = framePtr >> 2;\n          mod.HEAPF32.set(frame480, heapOffset);\n          const vadProb = mod._rnnoise_process_frame(ctxPtr, framePtr, framePtr);\n          frame480.set(mod.HEAPF32.subarray(heapOffset, heapOffset + RNNOISE_FRAME_SIZE));\n          return Number.isFinite(vadProb) ? vadProb : 0;\n        },\n        destroy() {\n          if (destroyed) return;\n          destroyed = true;\n          try { mod._free(framePtr); } catch (_e) {}\n          try { mod._rnnoise_destroy(ctxPtr); } catch (_e) {}\n        },\n      };\n    } catch (_e) {\n      return null;\n    }\n  }\n\n  class CircularFloat32Buffer {\n    constructor(capacity) {\n      this.capacity = capacity || RING_CAPACITY;\n      this.mask = this.capacity - 1;\n      this.storage = new Float32Array(this.capacity);\n      this.writePtr = 0;\n      this.readPtr = 0;\n      this.available = 0;\n    }\n    pushScaled(src, count, scale) {\n      if (count > this.capacity - this.available) return false;\n      for (let i = 0; i < count; i++) {\n        this.storage[this.writePtr] = src[i] * scale;\n        this.writePtr = (this.writePtr + 1) & this.mask;\n      }\n      this.available += count;\n      return true;\n    }\n    pullScaled(dst, offset, count, scale) {\n      if (this.available < count) return false;\n      for (let i = 0; i < count; i++) {\n        let s = this.storage[this.readPtr] * scale;\n        if (!Number.isFinite(s)) s = 0;\n        if (scale !== 1.0) s = s > 1.0 ? 1.0 : s < -1.0 ? -1.0 : s;\n        dst[offset + i] = s;\n        this.readPtr = (this.readPtr + 1) & this.mask;\n      }\n      this.available -= count;\n      return true;\n    }\n    clear() {\n      this.writePtr = 0;\n      this.readPtr = 0;\n      this.available = 0;\n      this.storage.fill(0);\n    }\n  }\n\n  class WorkletHybridDspCore {\n    constructor(rnnoise) {\n      this.inputRing = new CircularFloat32Buffer(RING_CAPACITY);\n      this.outputRing = new CircularFloat32Buffer(RING_CAPACITY);\n      this.frame480 = new Float32Array(RNNOISE_FRAME_SIZE);\n      this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);\n      this.rnnoise = rnnoise || null;\n      this.smoothedGain = 0.0;\n      this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;\n      this.scLpY = 0;\n      this.prevSample = 0;\n      this.noiseFloorRms = 120.0;\n      this.holdCounter = 0;\n      this.holdFrames = 26;\n      this.echoGuardDecayDb = -80.0;\n      this.lastFrameDb = -75;\n      this.lastVadProb = 0;\n      this.isGateOpen = false;\n      this.wasEnabled = true;\n    }\n\n    destroy() {\n      if (this.rnnoise) {\n        try { this.rnnoise.destroy(); } catch (_e) {}\n        this.rnnoise = null;\n      }\n      this.resetRings();\n    }\n\n    resetRings() {\n      this.inputRing.clear();\n      this.outputRing.clear();\n      this.frame480.fill(0);\n      this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);\n      this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;\n      this.scLpY = 0;\n      this.prevSample = 0;\n      this.noiseFloorRms = 120.0;\n      this.holdCounter = 0;\n      this.echoGuardDecayDb = -80.0;\n      this.smoothedGain = 0.0;\n      this.lastFrameDb = -75;\n      this.lastVadProb = 0;\n      this.isGateOpen = false;\n    }\n\n    processFrame480(frame, thresholdDb, krispMode, isLoopbackTest) {\n      const hasRnnoise = krispMode && this.rnnoise !== null;\n      let vadProb = 1.0;\n      if (hasRnnoise) {\n        try {\n          vadProb = this.rnnoise.processFrameInPlace(frame);\n          if (!Number.isFinite(vadProb)) vadProb = 0;\n          this.lastVadProb = Math.max(0, Math.min(1, vadProb));\n        } catch (_e) {\n          vadProb = 1.0;\n        }\n      } else {\n        this.lastVadProb = 0;\n      }\n\n      let vocalBandEnergy = 0;\n      let totalEnergy = 0;\n      let zeroCrossings = 0;\n\n      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {\n        let x0 = frame[i];\n        if (!Number.isFinite(x0)) {\n          x0 = 0;\n          frame[i] = 0;\n        }\n        if ((x0 >= 0 && this.hpX1 < 0) || (x0 < 0 && this.hpX1 >= 0)) {\n          zeroCrossings++;\n        }\n        const yHp = 0.9888 * x0 - 1.9776 * this.hpX1 + 0.9888 * this.hpX2 + 1.9774 * this.hpY1 - 0.9778 * this.hpY2;\n        this.hpX2 = this.hpX1; this.hpX1 = x0;\n        this.hpY2 = this.hpY1; this.hpY1 = yHp;\n        this.scLpY += 0.33 * (yHp - this.scLpY);\n        vocalBandEnergy += this.scLpY * this.scLpY;\n        totalEnergy += yHp * yHp;\n      }\n\n      const vocalRms = Math.sqrt(vocalBandEnergy / RNNOISE_FRAME_SIZE);\n      const totalRms = Math.sqrt(totalEnergy / RNNOISE_FRAME_SIZE);\n\n      if (totalRms < this.noiseFloorRms) {\n        this.noiseFloorRms = 0.92 * this.noiseFloorRms + 0.08 * totalRms;\n      } else {\n        this.noiseFloorRms = 0.9985 * this.noiseFloorRms + 0.0015 * totalRms;\n      }\n      this.noiseFloorRms = Math.max(40.0, Math.min(4500.0, this.noiseFloorRms));\n\n      const normRms = Math.max(1e-7, vocalRms / PCM16_SCALE);\n      let frameDb = 20.0 * Math.log10(normRms);\n\n      if (krispMode) {\n        if (hasRnnoise) {\n          if (zeroCrossings > 135 && vadProb < 0.35) {\n            frameDb -= 12.0;\n          } else if (vadProb < 0.16 && frameDb < thresholdDb + 10.0) {\n            frameDb -= 10.0;\n          } else if (vadProb >= 0.65) {\n            frameDb += 1.0;\n          }\n        } else if (zeroCrossings > 135) {\n          frameDb -= 12.0;\n        }\n      }\n\n      this.lastFrameDb = Math.round(frameDb);\n\n      this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);\n      const effectiveThresholdDb = isLoopbackTest\n        ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)\n        : thresholdDb;\n      const activeHoldFrames = isLoopbackTest ? 9 : this.holdFrames;\n\n      let targetGain = 0.0;\n      if (frameDb >= effectiveThresholdDb) {\n        targetGain = 1.0;\n        this.holdCounter = activeHoldFrames;\n        if (frameDb > this.echoGuardDecayDb) {\n          this.echoGuardDecayDb = frameDb;\n        }\n      } else if (this.holdCounter > 0) {\n        this.holdCounter--;\n        targetGain = 1.0;\n      } else {\n        targetGain = 0.0;\n      }\n\n      this.isGateOpen = targetGain > 0.5;\n\n      let intraSpeechDenoiseGain = 1.0;\n      if (krispMode && this.isGateOpen) {\n        const snr = Math.max(0.0, totalRms - this.noiseFloorRms * 1.25) / (totalRms + 1.0);\n        intraSpeechDenoiseGain = hasRnnoise\n          ? Math.max(0.78, Math.min(1.0, snr * 1.35))\n          : Math.max(0.28, Math.min(1.0, snr * 1.15));\n      }\n\n      const effectiveTargetGain = targetGain * intraSpeechDenoiseGain;\n      const maxVocalSlew = 5200.0;\n\n      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {\n        let sample = frame[i];\n        if (krispMode) {\n          const delta = sample - this.prevSample;\n          if (delta > maxVocalSlew || delta < -maxVocalSlew) {\n            sample = this.prevSample + delta * 0.22;\n          }\n          this.prevSample = sample;\n        }\n\n        const coeff = effectiveTargetGain > this.smoothedGain ? 0.12 : 0.008;\n        this.smoothedGain += coeff * (effectiveTargetGain - this.smoothedGain);\n        if (this.smoothedGain < 0.003 && targetGain === 0.0) {\n          this.smoothedGain = 0.0;\n        }\n        frame[i] = sample * this.smoothedGain;\n      }\n    }\n\n    processAudioBlock(inputBuffer, outputBuffer, enabled, thresholdDb, krispMode, isLoopbackTest) {\n      if (!enabled) {\n        this.wasEnabled = false;\n        outputBuffer.set(inputBuffer);\n        this.isGateOpen = true;\n        this.smoothedGain = 1.0;\n        return;\n      }\n      if (!this.wasEnabled) {\n        this.resetRings();\n        this.wasEnabled = true;\n      }\n      this.inputRing.pushScaled(inputBuffer, inputBuffer.length, PCM16_SCALE);\n      while (this.inputRing.available >= RNNOISE_FRAME_SIZE) {\n        this.inputRing.pullScaled(this.frame480, 0, RNNOISE_FRAME_SIZE, 1.0);\n        this.processFrame480(this.frame480, thresholdDb, krispMode, isLoopbackTest);\n        this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);\n      }\n      if (!this.outputRing.pullScaled(outputBuffer, 0, outputBuffer.length, 1.0 / PCM16_SCALE)) {\n        outputBuffer.fill(0);\n      }\n      if (this.smoothedGain === 0.0) {\n        outputBuffer.fill(0);\n      }\n    }\n  }\n\n  class OpungHybridWorkletProcessor extends AudioWorkletProcessor {\n    constructor() {\n      super();\n      this.alive = true;\n      this.enabled = true;\n      this.thresholdDb = -26;\n      this.krispMode = true;\n      this.isLoopbackTest = false;\n      this.needPcmStream = false;\n      this.quantumCount = 0;\n      this.pcmAcc = new Int16Array(512);\n      this.pcmPos = 0;\n\n      const rnnoiseEngine = createWorkletRnnoiseEngine();\n      this.dspCore = new WorkletHybridDspCore(rnnoiseEngine);\n\n      this.port.postMessage({\n        type: 'ready',\n        rnnoiseActive: Boolean(rnnoiseEngine),\n      });\n\n      this.port.onmessage = (ev) => {\n        const msg = ev.data || {};\n        if (msg.type === 'config') {\n          if (typeof msg.enabled === 'boolean') this.enabled = msg.enabled;\n          if (typeof msg.thresholdDb === 'number') this.thresholdDb = msg.thresholdDb;\n          if (typeof msg.krispMode === 'boolean') this.krispMode = msg.krispMode;\n          if (typeof msg.isLoopbackTest === 'boolean') this.isLoopbackTest = msg.isLoopbackTest;\n          if (typeof msg.needPcmStream === 'boolean') this.needPcmStream = msg.needPcmStream;\n        } else if (msg.type === 'reset') {\n          this.dspCore.resetRings();\n        } else if (msg.type === 'destroy') {\n          this.alive = false;\n          this.dspCore.destroy();\n        }\n      };\n    }\n\n    process(inputs, outputs) {\n      if (!this.alive) return false;\n      const inputGroup = inputs[0];\n      const outputGroup = outputs[0];\n      const inCh = inputGroup && inputGroup[0];\n      const outCh = outputGroup && outputGroup[0];\n\n      if (!outCh) return true;\n      if (!inCh || inCh.length === 0) {\n        outCh.fill(0);\n        return true;\n      }\n\n      this.dspCore.processAudioBlock(\n        inCh,\n        outCh,\n        this.enabled,\n        this.thresholdDb,\n        this.krispMode,\n        this.isLoopbackTest\n      );\n\n      this.quantumCount++;\n      if ((this.quantumCount & 3) === 0) {\n        this.port.postMessage({\n          type: 'stats',\n          frameDb: this.dspCore.lastFrameDb,\n          vadProb: this.dspCore.lastVadProb,\n          isGateOpen: this.dspCore.isGateOpen,\n          smoothedGain: this.dspCore.smoothedGain,\n          rnnoiseActive: Boolean(this.dspCore.rnnoise),\n        });\n      }\n\n      if (this.needPcmStream) {\n        const isMutedByGate =\n          this.enabled && !this.dspCore.isGateOpen && this.dspCore.smoothedGain === 0.0;\n        const vocalBoost = this.isLoopbackTest ? 1.15 : 1.85;\n        for (let i = 0; i < outCh.length; i++) {\n          const rawSample = isMutedByGate ? 0.0 : outCh[i] * vocalBoost;\n          const clipped = Math.tanh(rawSample);\n          this.pcmAcc[this.pcmPos++] = clipped < 0 ? clipped * 32768 : clipped * 32767;\n          if (this.pcmPos >= 512) {\n            const copy = new Int16Array(this.pcmAcc);\n            this.port.postMessage({ type: 'pcm', buffer: copy.buffer }, [copy.buffer]);\n            this.pcmPos = 0;\n          }\n        }\n      }\n\n      return true;\n    }\n  }\n\n  registerProcessor('opung-hybrid-processor', OpungHybridWorkletProcessor);\n})();\n";
+    const OPUNG_WORKLET_BODY = "\n(function () {\n  const RNNOISE_FRAME_SIZE = 480;\n  const RING_CAPACITY = 4096;\n  const PCM16_SCALE = 32768.0;\n\n  function createWorkletRnnoiseEngine() {\n    const factory = globalThis.__createOpungRnnoiseSync;\n    if (typeof factory !== 'function') {\n      return null;\n    }\n    try {\n      const mod = factory();\n      if (!mod || typeof mod._rnnoise_create !== 'function') {\n        return null;\n      }\n      const ctxPtr = mod._rnnoise_create(0);\n      if (!ctxPtr) return null;\n      const framePtr = mod._malloc(RNNOISE_FRAME_SIZE * 4);\n      if (!framePtr) {\n        mod._rnnoise_destroy(ctxPtr);\n        return null;\n      }\n      let destroyed = false;\n      return {\n        processFrameInPlace(frame480) {\n          if (destroyed) return 0;\n          const heapOffset = framePtr >> 2;\n          mod.HEAPF32.set(frame480, heapOffset);\n          const vadProb = mod._rnnoise_process_frame(ctxPtr, framePtr, framePtr);\n          frame480.set(mod.HEAPF32.subarray(heapOffset, heapOffset + RNNOISE_FRAME_SIZE));\n          return Number.isFinite(vadProb) ? vadProb : 0;\n        },\n        destroy() {\n          if (destroyed) return;\n          destroyed = true;\n          try { mod._free(framePtr); } catch (_e) {}\n          try { mod._rnnoise_destroy(ctxPtr); } catch (_e) {}\n        },\n      };\n    } catch (_e) {\n      return null;\n    }\n  }\n\n  class CircularFloat32Buffer {\n    constructor(capacity) {\n      this.capacity = capacity || RING_CAPACITY;\n      this.mask = this.capacity - 1;\n      this.storage = new Float32Array(this.capacity);\n      this.writePtr = 0;\n      this.readPtr = 0;\n      this.available = 0;\n    }\n    pushScaled(src, count, scale) {\n      if (count > this.capacity - this.available) return false;\n      for (let i = 0; i < count; i++) {\n        this.storage[this.writePtr] = src[i] * scale;\n        this.writePtr = (this.writePtr + 1) & this.mask;\n      }\n      this.available += count;\n      return true;\n    }\n    pullScaled(dst, offset, count, scale) {\n      if (this.available < count) return false;\n      for (let i = 0; i < count; i++) {\n        let s = this.storage[this.readPtr] * scale;\n        if (!Number.isFinite(s)) s = 0;\n        if (scale !== 1.0) s = s > 1.0 ? 1.0 : s < -1.0 ? -1.0 : s;\n        dst[offset + i] = s;\n        this.readPtr = (this.readPtr + 1) & this.mask;\n      }\n      this.available -= count;\n      return true;\n    }\n    clear() {\n      this.writePtr = 0;\n      this.readPtr = 0;\n      this.available = 0;\n      this.storage.fill(0);\n    }\n  }\n\n  class WorkletHybridDspCore {\n    constructor(rnnoise) {\n      this.inputRing = new CircularFloat32Buffer(RING_CAPACITY);\n      this.outputRing = new CircularFloat32Buffer(RING_CAPACITY);\n      this.frame480 = new Float32Array(RNNOISE_FRAME_SIZE);\n      this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);\n      this.rnnoise = rnnoise || null;\n      this.smoothedGain = 0.0;\n      this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;\n      this.scLpY = 0;\n      this.prevSample = 0;\n      this.noiseFloorRms = 120.0;\n      this.holdCounter = 0;\n      this.holdFrames = 26;\n      this.echoGuardDecayDb = -80.0;\n      this.lastFrameDb = -75;\n      this.lastVadProb = 0;\n      this.isGateOpen = false;\n      this.wasEnabled = true;\n    }\n\n    destroy() {\n      if (this.rnnoise) {\n        try { this.rnnoise.destroy(); } catch (_e) {}\n        this.rnnoise = null;\n      }\n      this.resetRings();\n    }\n\n    resetRings() {\n      this.inputRing.clear();\n      this.outputRing.clear();\n      this.frame480.fill(0);\n      this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);\n      this.hpX1 = 0; this.hpX2 = 0; this.hpY1 = 0; this.hpY2 = 0;\n      this.scLpY = 0;\n      this.prevSample = 0;\n      this.noiseFloorRms = 120.0;\n      this.holdCounter = 0;\n      this.echoGuardDecayDb = -80.0;\n      this.smoothedGain = 0.0;\n      this.lastFrameDb = -75;\n      this.lastVadProb = 0;\n      this.isGateOpen = false;\n    }\n\n    processFrame480(frame, thresholdDb, krispMode, isLoopbackTest) {\n      const hasRnnoise = krispMode && this.rnnoise !== null;\n      let vadProb = 1.0;\n      if (hasRnnoise) {\n        try {\n          vadProb = this.rnnoise.processFrameInPlace(frame);\n          if (!Number.isFinite(vadProb)) vadProb = 0;\n          this.lastVadProb = Math.max(0, Math.min(1, vadProb));\n        } catch (_e) {\n          vadProb = 1.0;\n        }\n      } else {\n        this.lastVadProb = 0;\n      }\n\n      let vocalBandEnergy = 0;\n      let totalEnergy = 0;\n      let zeroCrossings = 0;\n\n      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {\n        let x0 = frame[i];\n        if (!Number.isFinite(x0)) {\n          x0 = 0;\n          frame[i] = 0;\n        }\n        if ((x0 >= 0 && this.hpX1 < 0) || (x0 < 0 && this.hpX1 >= 0)) {\n          zeroCrossings++;\n        }\n        const yHp = 0.9888 * x0 - 1.9776 * this.hpX1 + 0.9888 * this.hpX2 + 1.9774 * this.hpY1 - 0.9778 * this.hpY2;\n        this.hpX2 = this.hpX1; this.hpX1 = x0;\n        this.hpY2 = this.hpY1; this.hpY1 = yHp;\n        this.scLpY += 0.33 * (yHp - this.scLpY);\n        vocalBandEnergy += this.scLpY * this.scLpY;\n        totalEnergy += yHp * yHp;\n      }\n\n      const vocalRms = Math.sqrt(vocalBandEnergy / RNNOISE_FRAME_SIZE);\n      const totalRms = Math.sqrt(totalEnergy / RNNOISE_FRAME_SIZE);\n\n      if (totalRms < this.noiseFloorRms) {\n        this.noiseFloorRms = 0.92 * this.noiseFloorRms + 0.08 * totalRms;\n      } else {\n        this.noiseFloorRms = 0.9985 * this.noiseFloorRms + 0.0015 * totalRms;\n      }\n      this.noiseFloorRms = Math.max(40.0, Math.min(4500.0, this.noiseFloorRms));\n\n      const normRms = Math.max(1e-7, vocalRms / PCM16_SCALE);\n      let frameDb = 20.0 * Math.log10(normRms);\n\n      if (krispMode) {\n        if (hasRnnoise) {\n          if (zeroCrossings > 135 && vadProb < 0.35) {\n            frameDb -= 12.0;\n          } else if (vadProb < 0.16 && frameDb < thresholdDb + 10.0) {\n            frameDb -= 10.0;\n          } else if (vadProb >= 0.65) {\n            frameDb += 1.0;\n          }\n        } else if (zeroCrossings > 135) {\n          frameDb -= 12.0;\n        }\n      }\n\n      this.lastFrameDb = Math.round(frameDb);\n\n      this.echoGuardDecayDb = Math.max(-80.0, this.echoGuardDecayDb - 0.45);\n      const effectiveThresholdDb = isLoopbackTest\n        ? Math.max(thresholdDb + 3.0, this.echoGuardDecayDb - 6.5)\n        : thresholdDb;\n      const activeHoldFrames = isLoopbackTest ? 9 : this.holdFrames;\n\n      let targetGain = 0.0;\n      if (frameDb >= effectiveThresholdDb) {\n        targetGain = 1.0;\n        this.holdCounter = activeHoldFrames;\n        if (frameDb > this.echoGuardDecayDb) {\n          this.echoGuardDecayDb = frameDb;\n        }\n      } else if (this.holdCounter > 0) {\n        this.holdCounter--;\n        targetGain = 1.0;\n      } else {\n        targetGain = 0.0;\n      }\n\n      this.isGateOpen = targetGain > 0.5;\n\n      let intraSpeechDenoiseGain = 1.0;\n      if (krispMode && this.isGateOpen) {\n        const snr = Math.max(0.0, totalRms - this.noiseFloorRms * 1.25) / (totalRms + 1.0);\n        intraSpeechDenoiseGain = hasRnnoise\n          ? Math.max(0.78, Math.min(1.0, snr * 1.35))\n          : Math.max(0.28, Math.min(1.0, snr * 1.15));\n      }\n\n      const effectiveTargetGain = targetGain * intraSpeechDenoiseGain;\n      const maxVocalSlew = 5200.0;\n\n      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {\n        let sample = frame[i];\n        if (krispMode) {\n          const delta = sample - this.prevSample;\n          if (delta > maxVocalSlew || delta < -maxVocalSlew) {\n            sample = this.prevSample + delta * 0.22;\n          }\n          this.prevSample = sample;\n        }\n\n        const coeff = effectiveTargetGain > this.smoothedGain ? 0.12 : 0.008;\n        this.smoothedGain += coeff * (effectiveTargetGain - this.smoothedGain);\n        if (this.smoothedGain < 0.003 && targetGain === 0.0) {\n          this.smoothedGain = 0.0;\n        }\n        frame[i] = sample * this.smoothedGain;\n      }\n    }\n\n    processAudioBlock(inputBuffer, outputBuffer, enabled, thresholdDb, krispMode, isLoopbackTest) {\n      if (!enabled) {\n        this.wasEnabled = false;\n        outputBuffer.set(inputBuffer);\n        let sumSq = 0;\n        for (let i = 0; i < inputBuffer.length; i++) {\n          const s = Number.isFinite(inputBuffer[i]) ? inputBuffer[i] : 0;\n          sumSq += s * s;\n        }\n        const rms = inputBuffer.length > 0 ? Math.sqrt(sumSq / inputBuffer.length) : 0;\n        this.lastFrameDb = Math.round(20.0 * Math.log10(Math.max(1e-4, rms)));\n        this.isGateOpen = true;\n        this.smoothedGain = 1.0;\n        return;\n      }\n      if (!this.wasEnabled) {\n        this.resetRings();\n        this.wasEnabled = true;\n      }\n      this.inputRing.pushScaled(inputBuffer, inputBuffer.length, PCM16_SCALE);\n      while (this.inputRing.available >= RNNOISE_FRAME_SIZE) {\n        this.inputRing.pullScaled(this.frame480, 0, RNNOISE_FRAME_SIZE, 1.0);\n        this.processFrame480(this.frame480, thresholdDb, krispMode, isLoopbackTest);\n        this.outputRing.pushScaled(this.frame480, RNNOISE_FRAME_SIZE, 1.0);\n      }\n      if (!this.outputRing.pullScaled(outputBuffer, 0, outputBuffer.length, 1.0 / PCM16_SCALE)) {\n        outputBuffer.fill(0);\n      }\n      if (this.smoothedGain === 0.0) {\n        outputBuffer.fill(0);\n      }\n    }\n  }\n\n  class OpungHybridWorkletProcessor extends AudioWorkletProcessor {\n    constructor() {\n      super();\n      this.alive = true;\n      this.enabled = true;\n      this.thresholdDb = -26;\n      this.krispMode = true;\n      this.isLoopbackTest = false;\n      this.needPcmStream = false;\n      this.quantumCount = 0;\n      this.pcmAcc = new Int16Array(512);\n      this.pcmPos = 0;\n\n      const rnnoiseEngine = createWorkletRnnoiseEngine();\n      this.dspCore = new WorkletHybridDspCore(rnnoiseEngine);\n\n      this.port.postMessage({\n        type: 'ready',\n        rnnoiseActive: Boolean(rnnoiseEngine),\n      });\n\n      this.port.onmessage = (ev) => {\n        const msg = ev.data || {};\n        if (msg.type === 'config') {\n          if (typeof msg.enabled === 'boolean') this.enabled = msg.enabled;\n          if (typeof msg.thresholdDb === 'number') this.thresholdDb = msg.thresholdDb;\n          if (typeof msg.krispMode === 'boolean') this.krispMode = msg.krispMode;\n          if (typeof msg.isLoopbackTest === 'boolean') this.isLoopbackTest = msg.isLoopbackTest;\n          if (typeof msg.needPcmStream === 'boolean') this.needPcmStream = msg.needPcmStream;\n        } else if (msg.type === 'reset') {\n          this.dspCore.resetRings();\n        } else if (msg.type === 'destroy') {\n          this.alive = false;\n          this.dspCore.destroy();\n        }\n      };\n    }\n\n    process(inputs, outputs) {\n      if (!this.alive) return false;\n      const inputGroup = inputs[0];\n      const outputGroup = outputs[0];\n      const inCh = inputGroup && inputGroup[0];\n      const outCh = outputGroup && outputGroup[0];\n\n      if (!outCh) return true;\n      if (!inCh || inCh.length === 0) {\n        outCh.fill(0);\n        return true;\n      }\n\n      this.dspCore.processAudioBlock(\n        inCh,\n        outCh,\n        this.enabled,\n        this.thresholdDb,\n        this.krispMode,\n        this.isLoopbackTest\n      );\n\n      this.quantumCount++;\n      if ((this.quantumCount & 3) === 0) {\n        this.port.postMessage({\n          type: 'stats',\n          frameDb: this.dspCore.lastFrameDb,\n          vadProb: this.dspCore.lastVadProb,\n          isGateOpen: this.dspCore.isGateOpen,\n          smoothedGain: this.dspCore.smoothedGain,\n          rnnoiseActive: Boolean(this.dspCore.rnnoise),\n        });\n      }\n\n      if (this.needPcmStream) {\n        const isMutedByGate =\n          this.enabled && !this.dspCore.isGateOpen && this.dspCore.smoothedGain === 0.0;\n        const vocalBoost = this.isLoopbackTest ? 1.15 : 1.85;\n        for (let i = 0; i < outCh.length; i++) {\n          const rawSample = isMutedByGate ? 0.0 : outCh[i] * vocalBoost;\n          const clipped = Math.tanh(rawSample);\n          this.pcmAcc[this.pcmPos++] = clipped < 0 ? clipped * 32768 : clipped * 32767;\n          if (this.pcmPos >= 512) {\n            const copy = new Int16Array(this.pcmAcc);\n            this.port.postMessage({ type: 'pcm', buffer: copy.buffer }, [copy.buffer]);\n            this.pcmPos = 0;\n          }\n        }\n      }\n\n      return true;\n    }\n  }\n\n  registerProcessor('opung-hybrid-processor', OpungHybridWorkletProcessor);\n\n  class OpungPcmTapProcessor extends AudioWorkletProcessor {\n    constructor() {\n      super();\n      this.alive = true;\n      this.streaming = false;\n      this.pcmAcc = new Int16Array(512);\n      this.pcmPos = 0;\n      this.port.onmessage = (ev) => {\n        const msg = ev.data || {};\n        if (msg.type === 'config') {\n          if (typeof msg.streaming === 'boolean') {\n            this.streaming = msg.streaming;\n            if (!this.streaming) {\n              this.pcmPos = 0;\n            }\n          }\n        } else if (msg.type === 'destroy') {\n          this.alive = false;\n          this.streaming = false;\n        }\n      };\n    }\n\n    process(inputs, outputs) {\n      if (!this.alive) return false;\n      const inCh = inputs[0] && inputs[0][0];\n      const outCh = outputs[0] && outputs[0][0];\n\n      if (outCh) {\n        if (inCh && inCh.length > 0) {\n          outCh.set(inCh);\n        } else {\n          outCh.fill(0);\n        }\n      }\n\n      if (!this.streaming || !inCh || inCh.length === 0) {\n        return true;\n      }\n\n      for (let i = 0; i < inCh.length; i++) {\n        const raw = Number.isFinite(inCh[i]) ? inCh[i] : 0.0;\n        const clipped = Math.tanh(raw);\n        this.pcmAcc[this.pcmPos++] = clipped < 0 ? clipped * 32768 : clipped * 32767;\n        if (this.pcmPos >= 512) {\n          const copy = new Int16Array(this.pcmAcc);\n          this.port.postMessage({ type: 'pcm', buffer: copy.buffer }, [copy.buffer]);\n          this.pcmPos = 0;\n        }\n      }\n\n      return true;\n    }\n  }\n\n  registerProcessor('opung-pcm-tap', OpungPcmTapProcessor);\n})();\n";
     const RNNOISE_FRAME_SIZE = 480;
     const RING_CAPACITY = 4096;
     const PCM16_SCALE = 32768.0;
@@ -1208,6 +1209,13 @@ run();
         if (!enabled) {
           this.wasEnabled = false;
           outputBuffer.set(inputBuffer);
+          let sumSq = 0;
+          for (let i = 0; i < inputBuffer.length; i++) {
+            const s = Number.isFinite(inputBuffer[i]) ? inputBuffer[i] : 0;
+            sumSq += s * s;
+          }
+          const rms = inputBuffer.length > 0 ? Math.sqrt(sumSq / inputBuffer.length) : 0;
+          this.lastFrameDb = Math.round(20.0 * Math.log10(Math.max(1e-4, rms)));
           this.isGateOpen = true;
           this.smoothedGain = 1.0;
           return;
@@ -1263,6 +1271,8 @@ run();
     let rawAnalyser = null;
     let cleanAnalyser = null;
     let activeMakeupGainNode = null;
+    let activeLowPassNode = null;
+    let activeHardGateGain = null;
     let dspCore = new NearFieldRNNoiseDspCore();
     let audioPipelineSessionId = 0;
     let currentMicStream = null;
@@ -1270,7 +1280,10 @@ run();
     let selectedVirtualSinkId = '';
     let nativeCoreAudioSinkActive = false;
     let activeWorkletNode = null;
+    let activePcmTapNode = null;
     let activeAudioEngineMode = 'script';
+    let micTransientRetryCount = 0;
+    let micNeedsManualRetry = false;
     const workletStats = {
       frameDb: -75,
       vadProb: 0,
@@ -1282,6 +1295,7 @@ run();
     let calibrationTimeout = null;
 
     function syncStandaloneWorkletConfig() {
+      const shouldStreamNativePcm = nativeCoreAudioSinkActive && hasNativeCoreAudioBridge();
       if (activeWorkletNode && activeWorkletNode.port) {
         try {
           activeWorkletNode.port.postMessage({
@@ -1290,10 +1304,28 @@ run();
             thresholdDb,
             krispMode: true,
             isLoopbackTest: loopbackAudible,
-            needPcmStream: nativeCoreAudioSinkActive && hasNativeCoreAudioBridge(),
+            needPcmStream: !activePcmTapNode && shouldStreamNativePcm,
           });
         } catch (_e) {}
       }
+      if (activePcmTapNode && activePcmTapNode.port) {
+        try {
+          activePcmTapNode.port.postMessage({
+            type: 'config',
+            streaming: shouldStreamNativePcm,
+          });
+        } catch (_e) {}
+      }
+    }
+
+    function sendInt16BufferToNativeBridge(arrayBuffer) {
+      if (!nativeCoreAudioSinkActive || !hasNativeCoreAudioBridge() || !arrayBuffer) return;
+      const bytes = new Uint8Array(arrayBuffer);
+      let bin = '';
+      for (let j = 0; j < bytes.length; j++) {
+        bin += String.fromCharCode(bytes[j]);
+      }
+      sendNativeBridgeCommand(btoa(bin));
     }
 
     const isWindowsPlatform = /windows|win32|win64/i.test(navigator.userAgent || '');
@@ -1330,23 +1362,47 @@ run();
       }
     }
 
+    function handleNativeSinkStatus(status) {
+      if (status === 'VBCABLE_MISSING') {
+        nativeCoreAudioSinkActive = false;
+        sinkBadge.textContent = 'VB-CABLE Belum Terpasang';
+        sinkBadge.style.color = '#fbbf24';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'VBCABLE_ERROR') {
+        nativeCoreAudioSinkActive = false;
+        sinkBadge.textContent = 'VB-CABLE Sibuk — Klik Segarkan';
+        sinkBadge.style.color = '#f87171';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'VBCABLE_READY') {
+        nativeCoreAudioSinkActive = true;
+        sinkBadge.textContent = 'Terhubung ke VB-CABLE ✓';
+        sinkBadge.style.color = '#34d399';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'BLACKHOLE_MISSING') {
+        nativeCoreAudioSinkActive = false;
+        sinkBadge.textContent = 'BlackHole 2ch Belum Terpasang';
+        sinkBadge.style.color = '#fbbf24';
+        syncStandaloneWorkletConfig();
+      } else if (status === 'BLACKHOLE_READY') {
+        nativeCoreAudioSinkActive = true;
+        sinkBadge.textContent = 'Terhubung ke BlackHole 2ch ✓';
+        sinkBadge.style.color = '#34d399';
+        syncStandaloneWorkletConfig();
+      }
+    }
+    window.__onOpungNativeSinkStatus = handleNativeSinkStatus;
+
     if (hasWebView2AudioBridge() && typeof window.chrome.webview.addEventListener === 'function') {
       window.chrome.webview.addEventListener('message', (event) => {
         const msg = typeof event.data === 'string' ? event.data : '';
-        if (msg === 'VBCABLE_MISSING') {
-          nativeCoreAudioSinkActive = false;
-          sinkBadge.textContent = 'VB-CABLE Belum Terpasang';
-          sinkBadge.style.color = '#fbbf24';
-        } else if (msg === 'VBCABLE_READY') {
-          nativeCoreAudioSinkActive = true;
-          sinkBadge.textContent = 'Terhubung ke VB-CABLE ✓';
-          sinkBadge.style.color = '#34d399';
-        }
+        if (msg) handleNativeSinkStatus(msg);
       });
     }
 
     function fitNativeWindowHeight() {
-      const h = document.body ? document.body.offsetHeight : 0;
+      const h = document.body
+        ? Math.max(document.body.scrollHeight || 0, document.body.offsetHeight || 0)
+        : 0;
       if (h > 400) {
         sendNativeBridgeCommand('HEIGHT:' + h);
       }
@@ -1469,6 +1525,15 @@ run();
 
     if (calibrateRoomBtn) {
       calibrateRoomBtn.addEventListener('click', () => {
+        if (!audioCtx || !currentMicStream) {
+          if (calNoteText) {
+            calNoteText.style.display = 'block';
+            calNoteText.textContent = 'Aktifkan izin mikrofon terlebih dahulu untuk kalibrasi.';
+            fitNativeWindowHeight();
+          }
+          startMacAudioPipeline(micInputSelect.value);
+          return;
+        }
         if (calibrationTimer) clearInterval(calibrationTimer);
         if (calibrationTimeout) clearTimeout(calibrationTimeout);
         const samples = [];
@@ -1513,6 +1578,21 @@ run();
     heroSwitchCard.addEventListener('click', () => {
       isEnabled = !isEnabled;
       syncStandaloneWorkletConfig();
+      if (audioCtx) {
+        if (activeLowPassNode) {
+          activeLowPassNode.frequency.setTargetAtTime(isEnabled ? 7600 : 18000, audioCtx.currentTime, 0.02);
+        }
+        if (activeMakeupGainNode) {
+          activeMakeupGainNode.gain.setTargetAtTime(
+            loopbackAudible ? 0.85 : isEnabled ? 1.65 : 1.0,
+            audioCtx.currentTime,
+            0.02
+          );
+        }
+        if (!isEnabled && activeHardGateGain) {
+          activeHardGateGain.gain.value = 1.0;
+        }
+      }
       if (isEnabled) {
         heroSwitchCard.className = 'hero-switch-card active';
         toggleBtn.className = 'toggle-track active';
@@ -1565,7 +1645,7 @@ run();
       // Hardware AEC harus selalu aktif agar suara dari speaker/earphone tidak memantul masuk kembali ke mic (anti-efek goa).
       if (activeMakeupGainNode && audioCtx) {
         activeMakeupGainNode.gain.setTargetAtTime(
-          loopbackAudible ? 0.85 : 1.35,
+          loopbackAudible ? 0.85 : isEnabled ? 1.65 : 1.0,
           audioCtx.currentTime,
           0.02
         );
@@ -1693,11 +1773,25 @@ run();
     const refreshDevsBtn = document.getElementById('refreshDevsBtn');
     if (refreshDevsBtn) {
       refreshDevsBtn.addEventListener('click', async () => {
+        if (micNeedsManualRetry || !audioCtx || !currentMicStream) {
+          micTransientRetryCount = 0;
+          await startMacAudioPipeline(micInputSelect.value);
+          return;
+        }
         if (audioCtx && audioCtx.state === 'suspended') {
           await audioCtx.resume().catch(() => {});
         }
-        sendNativeBridgeCommand('SINK:ON');
         await populateMacAudioDevices(micInputSelect.value, '', true);
+      });
+    }
+    const engineStatusEl = document.getElementById('engineStatus');
+    if (engineStatusEl) {
+      engineStatusEl.style.cursor = 'pointer';
+      engineStatusEl.addEventListener('click', () => {
+        if (micNeedsManualRetry || !audioCtx || !currentMicStream) {
+          micTransientRetryCount = 0;
+          startMacAudioPipeline(micInputSelect.value);
+        }
       });
     }
     if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
@@ -1825,6 +1919,9 @@ run();
 
     window.addEventListener('beforeunload', () => {
       audioPipelineSessionId += 1;
+      if (activePcmTapNode && activePcmTapNode.port) {
+        try { activePcmTapNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
+      }
       if (activeWorkletNode && activeWorkletNode.port) {
         try { activeWorkletNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
       }
@@ -1835,7 +1932,19 @@ run();
 
     async function startMacAudioPipeline(selectedInputId) {
       const sessionId = ++audioPipelineSessionId;
+      micNeedsManualRetry = false;
       try {
+        if (activePcmTapNode) {
+          try { activePcmTapNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
+          activePcmTapNode.port.onmessage = null;
+          activePcmTapNode.disconnect();
+          activePcmTapNode = null;
+        }
+        if (window.__opungPostEqTapNode) {
+          window.__opungPostEqTapNode.onaudioprocess = null;
+          window.__opungPostEqTapNode.disconnect();
+          window.__opungPostEqTapNode = null;
+        }
         if (activeWorkletNode) {
           try { activeWorkletNode.port.postMessage({ type: 'destroy' }); } catch (_e) {}
           activeWorkletNode.port.onmessage = null;
@@ -1852,9 +1961,11 @@ run();
         }
         if (currentMicStream) {
           currentMicStream.getTracks().forEach((t) => t.stop());
+          currentMicStream = null;
         }
         if (audioCtx && audioCtx.state !== 'closed') {
           await audioCtx.close().catch(() => {});
+          audioCtx = null;
         }
 
         // 1. Cek daftar perangkat sebelum getUserMedia agar tidak pernah membuka 'default' jika 'default' adalah BlackHole 2ch!
@@ -1953,6 +2064,7 @@ run();
 
         const hardGateGain = audioCtx.createGain();
         hardGateGain.gain.value = 1.0;
+        activeHardGateGain = hardGateGain;
 
         // OTOMATIS AKTIF: 5-Stage Studio HD Vocal Clarity Equalizer + Krisp Vocal Mask
         const subCutNode = audioCtx.createBiquadFilter();
@@ -1962,8 +2074,9 @@ run();
 
         const krispLowPassNode = audioCtx.createBiquadFilter();
         krispLowPassNode.type = 'lowpass';
-        krispLowPassNode.frequency.value = 4600;
+        krispLowPassNode.frequency.value = isEnabled ? 7600 : 18000;
         krispLowPassNode.Q.value = 0.707;
+        activeLowPassNode = krispLowPassNode;
 
         const mudCutNode = audioCtx.createBiquadFilter();
         mudCutNode.type = 'peaking';
@@ -1996,10 +2109,11 @@ run();
         studioCompressor.release.value = 0.15;
 
         const makeupGainNode = audioCtx.createGain();
-        makeupGainNode.gain.value = loopbackAudible ? 0.85 : 1.65;
+        makeupGainNode.gain.value = loopbackAudible ? 0.85 : isEnabled ? 1.65 : 1.0;
         activeMakeupGainNode = makeupGainNode;
 
         let processingNode = null;
+        let postEqBridgeTapNode = null;
         const rnnoiseScriptEl = document.getElementById('opung-rnnoise-src');
         if (
           audioCtx.audioWorklet &&
@@ -2043,15 +2157,32 @@ run();
                 workletStats.rnnoiseActive = Boolean(msg.rnnoiseActive);
                 const isMutedByGate = isEnabled && !workletStats.isGateOpen && workletStats.smoothedGain === 0.0;
                 hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
-              } else if (msg.type === 'pcm' && msg.buffer && nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
-                const bytes = new Uint8Array(msg.buffer);
-                let bin = '';
-                for (let j = 0; j < bytes.length; j++) {
-                  bin += String.fromCharCode(bytes[j]);
-                }
-                sendNativeBridgeCommand(btoa(bin));
+              } else if (msg.type === 'pcm' && msg.buffer) {
+                sendInt16BufferToNativeBridge(msg.buffer);
               }
             };
+
+            // Post-EQ PCM Tap (setelah 5-Stage Studio HD EQ + Compressor + hardGateGain)
+            // agar Google Meet / Zoom pada macOS (BlackHole) & Windows (VB-CABLE) menerima audio Studio HD utuh!
+            try {
+              const pcmTapNode = new AudioWorkletNode(audioCtx, 'opung-pcm-tap', {
+                numberOfInputs: 1,
+                numberOfOutputs: 1,
+                outputChannelCount: [1],
+              });
+              pcmTapNode.port.onmessage = (ev) => {
+                if (audioPipelineSessionId !== sessionId) return;
+                const msg = ev.data;
+                if (msg && msg.type === 'pcm' && msg.buffer) {
+                  sendInt16BufferToNativeBridge(msg.buffer);
+                }
+              };
+              activePcmTapNode = pcmTapNode;
+              postEqBridgeTapNode = pcmTapNode;
+            } catch (_tapErr) {
+              activePcmTapNode = null;
+            }
+
             activeWorkletNode = workletNode;
             activeAudioEngineMode = 'worklet';
             syncStandaloneWorkletConfig();
@@ -2081,30 +2212,33 @@ run();
             })
             .catch(() => {});
 
-          const pcm16Scratch = new Int16Array(512);
-          const uint8Scratch = new Uint8Array(pcm16Scratch.buffer);
-
           processorNode.onaudioprocess = (ev) => {
             const inBuf = ev.inputBuffer.getChannelData(0);
             const outBuf = ev.outputBuffer.getChannelData(0);
             dspCore.processAudioBlock(inBuf, outBuf, isEnabled, thresholdDb, loopbackAudible);
             const isMutedByGate = isEnabled && !dspCore.isGateOpen && dspCore.smoothedGain === 0.0;
             hardGateGain.gain.value = isMutedByGate ? 0.0 : 1.0;
-
-            if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
-              const vocalBoost = loopbackAudible ? 1.15 : 1.85;
-              for (let i = 0; i < outBuf.length; i++) {
-                const rawSample = isMutedByGate ? 0.0 : outBuf[i] * vocalBoost;
-                const clipped = Math.tanh(rawSample);
-                pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
-              }
-              let bin = '';
-              for (let j = 0; j < uint8Scratch.length; j++) {
-                bin += String.fromCharCode(uint8Scratch[j]);
-              }
-              sendNativeBridgeCommand(btoa(bin));
-            }
           };
+
+          if (hasNativeCoreAudioBridge()) {
+            const postEqTap = audioCtx.createScriptProcessor(512, 1, 1);
+            window.__opungPostEqTapNode = postEqTap;
+            const pcm16Scratch = new Int16Array(512);
+            postEqTap.onaudioprocess = (ev) => {
+              const inBuf = ev.inputBuffer.getChannelData(0);
+              const outBuf = ev.outputBuffer.getChannelData(0);
+              outBuf.set(inBuf);
+              if (nativeCoreAudioSinkActive && hasNativeCoreAudioBridge()) {
+                for (let i = 0; i < inBuf.length; i++) {
+                  const raw = Number.isFinite(inBuf[i]) ? inBuf[i] : 0.0;
+                  const clipped = Math.tanh(raw);
+                  pcm16Scratch[i] = clipped < 0 ? clipped * 32768 : clipped * 32767;
+                }
+                sendInt16BufferToNativeBridge(pcm16Scratch.buffer);
+              }
+            };
+            postEqBridgeTapNode = postEqTap;
+          }
           processingNode = processorNode;
         }
 
@@ -2141,10 +2275,16 @@ run();
         makeupGainNode.connect(hardGateGain);
         hardGateGain.connect(cleanAnalyser);
         cleanAnalyser.connect(cleanDest);
-        cleanAnalyser.connect(keepAliveGain);
+        if (postEqBridgeTapNode) {
+          hardGateGain.connect(postEqBridgeTapNode);
+          postEqBridgeTapNode.connect(keepAliveGain);
+        } else {
+          cleanAnalyser.connect(keepAliveGain);
+        }
         keepAliveGain.connect(audioCtx.destination);
 
         currentCleanStream = cleanDest.stream;
+        micTransientRetryCount = 0;
 
         if (loopbackAudible) {
           await routeEarphoneLoopbackToPhysicalDevice();
@@ -2170,9 +2310,32 @@ run();
         }
         await populateMacAudioDevices(targetInputId || activeSettingsId, activeTrackLabel, true);
       } catch (err) {
-        document.getElementById('engineStatus').textContent = 'Menghubungkan Mikrofon...';
+        const errName = err && err.name ? String(err.name) : '';
+        const isPermanentMicError =
+          errName === 'NotAllowedError' ||
+          errName === 'PermissionDeniedError' ||
+          errName === 'NotFoundError' ||
+          errName === 'DevicesNotFoundError' ||
+          errName === 'SecurityError';
+        const badge = document.getElementById('engineStatus');
+        if (isPermanentMicError || micTransientRetryCount >= 2) {
+          micNeedsManualRetry = true;
+          if (badge) {
+            badge.textContent =
+              errName === 'NotFoundError' || errName === 'DevicesNotFoundError'
+                ? 'Mikrofon Tidak Ditemukan (Klik Ulang)'
+                : 'Izin Mikrofon Diperlukan (Klik Ulang)';
+          }
+          return;
+        }
+        micTransientRetryCount++;
+        if (badge) {
+          badge.textContent = 'Menghubungkan Mikrofon...';
+        }
         setTimeout(() => {
-          startMacAudioPipeline(selectedInputId);
+          if (audioPipelineSessionId === sessionId) {
+            startMacAudioPipeline(selectedInputId);
+          }
         }, 1200);
       }
     }
